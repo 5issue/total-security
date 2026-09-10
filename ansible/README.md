@@ -1,7 +1,7 @@
 # 인프라 점검 Ansible
 
-`claude_code_handoff_spec.md`(script/ 상위) 기준으로 서버·DBMS 자동 점검 코드를 구성했다.
-전체 파이프라인(클라우드 boto3 + 병합 스크립트 포함)은 `script/run_check.sh` 참고.
+서버·DBMS 자동 점검 코드. 전체 파이프라인(클라우드 boto3 + 병합 스크립트 포함)은
+`../run_check.sh` 참고, 저장소 전체 개요는 `../README.md` 참고.
 
 ## 구성
 
@@ -57,8 +57,8 @@ ansible-playbook -i inventory/hosts.ini site_check.yml -e check_round="1차"
 DBMS 결과 항목에는 `target`(서비스명) 필드가 추가로 포함된다.
 
 이 JSON들을 `scripts/build_server_dbms_xlsx.py`가 읽어 `server_dbms_result.xlsx`(중간
-산출물)로 변환한다. 최종 산출물은 `merge_report.py`가 클라우드 결과와 합쳐서 만든다 —
-전체 흐름은 `script/run_check.sh` 하나로 실행 가능.
+산출물)로 변환한다. 최종 산출물은 `../merge_report.py`가 클라우드 결과와 합쳐서 만든다 —
+전체 흐름은 `../run_check.sh` 하나로 실행 가능.
 
 ## 아직 미착수 / 보류 (실제 인프라 연동 후 확인 필요)
 
