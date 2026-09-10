@@ -1,0 +1,50 @@
+---
+# =============================================================================
+# log_retention_check.yml — CloudWatch 로그그룹 존재·보관기간 조회 (공용 태스크)
+#   U-66(시스템 로깅), D-26(DBMS 감사기록)이 "동일 원칙"(spec 2.2/2.3절 — 보관기간 법정값만
+#   자동판정, 점검주기 실제 이행은 스코프 밖)이라 하나의 태스크로 공유한다.
+#   호출부에서 vars로 아래 값을 넘겨서 include_role(tasks_from: log_retention_check) 한다:
+#     lrc_item_id, lrc_item_name, lrc_log_group_name, lrc_target, lrc_min_days
+#   ⚠ AWS API 호출이라 mgmt 서버(controller)에서 AWS CLI로 조회한다(delegate_to: localhost).
+# =============================================================================
+
+- name: "{{ lrc_item_id }} | 로그그룹 미확정 시 SKIP"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': lrc_item_id, 'item': lrc_item_name, 'target': lrc_target, 'status': 'SKIP',
+      'detail': '로그 저장 위치(로그그룹명) 미확정 — 확인요청 표 17번 회신 대기'
+    }] }}"
+  when: lrc_log_group_name is none
+  run_once: true
+
+- name: "{{ lrc_item_id }} | CloudWatch 로그그룹 조회(mgmt 서버 AWS CLI)"
+  ansible.builtin.command:
+    cmd: "aws logs describe-log-groups --log-group-name-prefix {{ lrc_log_group_name }} --output json"
+  register: lrc_raw
+  delegate_to: localhost
+  run_once: true
+  failed_when: false
+  when: lrc_log_group_name is not none
+
+- name: "{{ lrc_item_id }} | 판정 기록"
+  vars:
+    lrc_ok: "{{ lrc_raw is defined and lrc_raw.rc == 0 }}"
+    lrc_parsed: "{{ (lrc_raw.stdout | from_json) if lrc_ok else {} }}"
+    lrc_groups: "{{ lrc_parsed.logGroups | default([]) | selectattr('logGroupName', 'equalto', lrc_log_group_name) | list }}"
+    lrc_group: "{{ lrc_groups[0] if lrc_groups | length > 0 else {} }}"
+    lrc_retention: "{{ lrc_group.retentionInDays | default(0) }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': lrc_item_id, 'item': lrc_item_name, 'target': lrc_target,
+      'status': (
+        'SKIP' if not lrc_ok else
+        ('FAIL' if lrc_groups | length == 0 else ('PASS' if lrc_retention | int >= lrc_min_days else 'FAIL'))
+      ),
+      'detail': (
+        'CloudWatch 로그그룹 조회 실패: ' ~ (lrc_raw.stderr | default('알 수 없는 오류')) if not lrc_ok
+        else ('로그그룹(' ~ lrc_log_group_name ~ ') 존재하지 않음 — 로그 미수집' if lrc_groups | length == 0
+              else '보관기간=' ~ lrc_retention ~ '일 (기준 ' ~ lrc_min_days ~ '일 이상)')
+      )
+    }] }}"
+  when: lrc_log_group_name is not none
+  run_once: true

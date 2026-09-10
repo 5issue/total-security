@@ -1,0 +1,52 @@
+---
+# =============================================================================
+# roles/log_patch_check — U-64(주기적 보안 패치) 점검
+#   2026-09-10 재분류(제외 → 자동판정가능(부분), spec 2.2절). SSM Patch Manager 사용을
+#   전제로 인스턴스별 패치 준수 상태를 조회한다. 대상 인스턴스(server_targets)마다 실행됨.
+#   ⚠ AWS API 호출이라 대상 호스트가 아니라 mgmt 서버(controller)에서 AWS CLI로 조회한다
+#     (delegate_to: localhost) — mgmt 서버에 이미 AWS CLI 자격증명이 구성되어 있음(spec 1절).
+#   전제조건(u64_ssm_patch_manager_confirmed)이 null/false면 AWS 호출 자체를 하지 않고 SKIP.
+# =============================================================================
+
+- name: "U-64 | 전제조건 미확정 시 SKIP"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-64', 'item': '주기적 보안 패치 및 벤더 권고사항 적용', 'target': inventory_hostname,
+      'status': 'SKIP',
+      'detail': '패치관리 도구가 SSM Patch Manager인지 미확정(확인요청 표 18번 회신 대기) — u64_ssm_patch_manager_confirmed'
+    }] }}"
+  when: not (u64_ssm_patch_manager_confirmed | default(false) | bool)
+
+- name: "U-64 | 대상 인스턴스 EC2 메타데이터 조회"
+  amazon.aws.ec2_metadata_facts:
+  when: u64_ssm_patch_manager_confirmed | default(false) | bool
+
+- name: "U-64 | SSM 패치 상태 조회(mgmt 서버 AWS CLI)"
+  ansible.builtin.command:
+    cmd: "aws ssm describe-instance-patch-states --instance-ids {{ ansible_ec2_instance_id }} --output json"
+  register: u64_patch_raw
+  delegate_to: localhost
+  failed_when: false
+  when: u64_ssm_patch_manager_confirmed | default(false) | bool
+
+- name: "U-64 | 판정 기록"
+  vars:
+    u64_ok: "{{ u64_patch_raw is defined and u64_patch_raw.rc == 0 }}"
+    u64_parsed: "{{ (u64_patch_raw.stdout | from_json) if u64_ok else {} }}"
+    u64_states: "{{ u64_parsed.InstancePatchStates | default([]) }}"
+    u64_state: "{{ u64_states[0] if u64_states | length > 0 else {} }}"
+    u64_missing: "{{ u64_state.MissingCount | default(0) }}"
+    u64_failed: "{{ u64_state.FailedCount | default(0) }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-64', 'item': '주기적 보안 패치 및 벤더 권고사항 적용', 'target': inventory_hostname,
+      'status': (
+        'SKIP' if not u64_ok or (u64_states | length == 0)
+        else ('PASS' if (u64_missing | int == 0 and u64_failed | int == 0) else 'FAIL')
+      ),
+      'detail': (
+        'SSM 패치 상태 조회 실패 또는 SSM Patch Manager 미등록 인스턴스(instance_id=' ~ (ansible_ec2_instance_id | default('미확인')) ~ ')' if not u64_ok or (u64_states | length == 0)
+        else 'MissingCount=' ~ u64_missing ~ ', FailedCount=' ~ u64_failed ~ ' (PatchGroup=' ~ (u64_state.PatchGroup | default('없음')) ~ ')'
+      )
+    }] }}"
+  when: u64_ssm_patch_manager_confirmed | default(false) | bool

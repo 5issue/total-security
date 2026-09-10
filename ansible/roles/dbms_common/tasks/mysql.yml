@@ -51,8 +51,8 @@
 
 - name: "{{ db_conn.service }} | D-02 판정 기록"
   vars:
-    d02_accounts: "{{ d02_raw.query_result | default([]) }}"
-    d02_unauthorized: "{{ d02_accounts | rejectattr('0.user', 'in', d02_unnecessary_account_whitelist | default([])) | list }}"
+    d02_accounts: "{{ d02_raw.query_result | default([]) | first | default([]) }}"
+    d02_unauthorized: "{{ d02_accounts | rejectattr('user', 'in', d02_unnecessary_account_whitelist | default([])) | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-02', 'item': '데이터베이스의 불필요 계정을 제거하거나, 잠금설정 후 사용', 'target': db_conn.service,
@@ -78,8 +78,8 @@
 
 - name: "{{ db_conn.service }} | D-03 판정 기록"
   vars:
-    d03_lifetime: "{{ (d03_raw.query_result | default([]) | selectattr('0.Variable_name', 'equalto', 'default_password_lifetime') | map(attribute='0.Value') | list | first) | default('0', true) }}"
-    d03_minlen: "{{ (d03_raw.query_result | default([]) | selectattr('0.Variable_name', 'equalto', 'validate_password.length') | map(attribute='0.Value') | list | first) | default('0', true) }}"
+    d03_lifetime: "{{ (d03_raw.query_result | default([]) | first | default([]) | selectattr('Variable_name', 'equalto', 'default_password_lifetime') | map(attribute='Value') | list | first) | default('0', true) }}"
+    d03_minlen: "{{ (d03_raw.query_result | default([]) | first | default([]) | selectattr('Variable_name', 'equalto', 'validate_password.length') | map(attribute='Value') | list | first) | default('0', true) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-03', 'item': '비밀번호의 사용기간 및 복잡도를 기관의 정책에 맞도록 설정', 'target': db_conn.service,
@@ -106,7 +106,7 @@
 
 - name: "{{ db_conn.service }} | D-04 판정 기록"
   vars:
-    d04_admins: "{{ d04_raw.query_result | default([]) | map(attribute='0.grantee') | list }}"
+    d04_admins: "{{ d04_raw.query_result | default([]) | first | default([]) | map(attribute='grantee') | list }}"
     d04_unauthorized: "{{ d04_admins | difference(d04_admin_account_whitelist | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
@@ -164,7 +164,7 @@
 
 - name: "{{ db_conn.service }} | D-06 판정 기록"
   vars:
-    d06_users: "{{ d06_raw.query_result | default([]) | map(attribute='0.user') | list }}"
+    d06_users: "{{ d06_raw.query_result | default([]) | first | default([]) | map(attribute='user') | list }}"
     d06_flagged: "{{ d06_users | select('regex', (d06_shared_account_name_patterns | default([]) | join('|'))) | list if d06_shared_account_name_patterns else [] }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
@@ -193,8 +193,8 @@
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-08', 'item': '안전한 암호화 알고리즘 사용', 'target': db_conn.service,
-      'status': 'PASS' if (d08_raw.query_result is defined and d08_raw.query_result | length == 0) else 'FAIL',
-      'detail': '취약 플러그인 사용 계정: ' ~ (d08_raw.query_result | default([]) | string | truncate(150))
+      'status': 'PASS' if (d08_raw.query_result is defined and (d08_raw.query_result | first | default([]) | length) == 0) else 'FAIL',
+      'detail': '취약 플러그인 사용 계정: ' ~ (d08_raw.query_result | default([]) | first | default([]) | string | truncate(150))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -238,44 +238,15 @@
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-09', 'item': '일정 횟수의 로그인 실패 시 이에 대한 잠금정책 설정', 'target': db_conn.service,
-      'status': 'PASS' if (d09_raw.query_result is defined and d09_raw.query_result | length == 0) else 'FAIL',
-      'detail': '잠금 미설정 계정: ' ~ (d09_raw.query_result | default([]) | string | truncate(150))
+      'status': 'PASS' if (d09_raw.query_result is defined and (d09_raw.query_result | first | default([]) | length) == 0) else 'FAIL',
+      'detail': '잠금 미설정 계정: ' ~ (d09_raw.query_result | default([]) | first | default([]) | string | truncate(150))
     }] }}"
   when: >
     d09_version_raw.query_result is defined and
     (d09_version_raw.query_result[0][0].values() | first) is version('8.0.19', '>=')
 
-# -----------------------------------------------------------------------------
-# D-10 | 원격 DB 서버 접속 제한 [절대기준 부분(와일드카드) + 기준값필요(화이트리스트)]
-# -----------------------------------------------------------------------------
-- name: "{{ db_conn.service }} | D-10 원격 접속 허용 호스트 조회"
-  community.mysql.mysql_query:
-    login_host: "{{ db_conn.host }}"
-    login_port: "{{ db_conn.port }}"
-    login_user: "{{ mysql_login_user }}"
-    login_password: "{{ mysql_login_password }}"
-    query: "SELECT DISTINCT host FROM mysql.user WHERE host NOT IN ('localhost','127.0.0.1')"
-  register: d10_raw
-  failed_when: false
-
-- name: "{{ db_conn.service }} | D-10 판정 기록"
-  vars:
-    d10_hosts: "{{ d10_raw.query_result | default([]) | map(attribute='0.host') | list }}"
-    d10_has_wildcard: "{{ '%' in d10_hosts }}"
-    d10_unauthorized: "{{ d10_hosts | difference(d10_allowed_client_hosts | default([])) }}"
-  ansible.builtin.set_fact:
-    check_results: "{{ check_results + [{
-      'id': 'D-10', 'item': '원격 DB 서버 접속 제한', 'target': db_conn.service,
-      'status': (
-        'FAIL' if d10_has_wildcard else
-        ('SKIP' if d10_allowed_client_hosts is none else ('PASS' if d10_unauthorized | length == 0 else 'FAIL'))
-      ),
-      'detail': (
-        '와일드카드 호스트(%) 허용됨 — 절대기준 위반' if d10_has_wildcard
-        else '허용된 호스트: ' ~ (d10_hosts | join(', ') if d10_hosts | length > 0 else '없음(localhost 전용)') ~
-             (' — 화이트리스트(d10_allowed_client_hosts) TODO' if d10_allowed_client_hosts is none else '')
-      )
-    }] }}"
+# D-10(원격 DB 서버 접속 제한)은 2026-09-09 인프라팀 확인으로 IP 허용목록이 아니라
+# K8s NetworkPolicy 기반으로 변경됨 — roles/dbms_common/tasks/k8s_pod_checks.yml 참고(spec 2.3절).
 
 # -----------------------------------------------------------------------------
 # D-11 | 시스템 테이블 접근 제한 (mysql.* 스키마, PUBLIC/일반 사용자 REVOKE 여부)
@@ -296,8 +267,8 @@
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-11', 'item': '시스템 테이블 접근 제한', 'target': db_conn.service,
-      'status': 'PASS' if (d11_raw.query_result is defined and d11_raw.query_result | length == 0) else 'FAIL',
-      'detail': '비관리자 접근 권한: ' ~ (d11_raw.query_result | default([]) | string | truncate(150))
+      'status': 'PASS' if (d11_raw.query_result is defined and (d11_raw.query_result | first | default([]) | length) == 0) else 'FAIL',
+      'detail': '비관리자 접근 권한: ' ~ (d11_raw.query_result | default([]) | first | default([]) | string | truncate(150))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -315,8 +286,8 @@
 
 - name: "{{ db_conn.service }} | D-17 판정 기록"
   vars:
-    d17_log_output: "{{ (d17_raw.query_result | default([]) | selectattr('0.Variable_name', 'equalto', 'log_output') | map(attribute='0.Value') | list | first) | default('', true) }}"
-    d17_general_log: "{{ (d17_raw.query_result | default([]) | selectattr('0.Variable_name', 'equalto', 'general_log') | map(attribute='0.Value') | list | first) | default('OFF', true) }}"
+    d17_log_output: "{{ (d17_raw.query_result | default([]) | first | default([]) | selectattr('Variable_name', 'equalto', 'log_output') | map(attribute='Value') | list | first) | default('', true) }}"
+    d17_general_log: "{{ (d17_raw.query_result | default([]) | first | default([]) | selectattr('Variable_name', 'equalto', 'general_log') | map(attribute='Value') | list | first) | default('OFF', true) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-17', 'item': 'Audit Table은 데이터베이스 관리자 계정으로 접근하도록 제한', 'target': db_conn.service,

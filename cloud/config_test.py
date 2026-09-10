@@ -6,6 +6,19 @@ PASS/FAIL 판정 로직이 기준값에 맞게 정상 동작하는지 확인하�
 실제 조직 값이 확정되면 이 파일이 아니라 config.py를 수정한다.
 """
 
+# 1.1 — 테스트 관리자 화이트리스트 예시
+IAM_ADMIN_WHITELIST = ["test-admin"]
+
+# 1.2 — 테스트 IAM 계정-담당자 매핑 예시(중복 담당자 있으면 FAIL 분기 확인용)
+IAM_ACCOUNT_OWNER_MAP = {
+    "test-admin": "person-a",
+    "test-dev1": "person-b",
+    "test-dev2": "person-b",   # 의도적 중복 — 1인 다중계정 FAIL 케이스 검증용
+}
+
+# 3.10⑤ — 테스트 ELB Idle Timeout 기준(초)
+ELB_IDLE_TIMEOUT_SECONDS = 120
+
 # 1.4 — 테스트 계정 그룹 예시
 IAM_GROUP_WHITELIST = {
     "Admins": ["test-admin"],

@@ -10,8 +10,18 @@ Ansible의 group_vars/all.yml과 동일한 원칙: 로직은 항상 작성하고
 출처: 인프라점검_항목분류표_v0_3.xlsx 클라우드 시트 "확정 기준값" 컬럼
 """
 
-# 1.8 Admin Console Access Key 사용주기 [확정] — 인프라팀 90일 운영 중이어도 60일 기준 FAIL
-ACCESS_KEY_MAX_AGE_DAYS = 60
+# 1.1 업무상 인가된 관리자(AdministratorAccess 직접보유) 화이트리스트 [TODO] — 확인요청 표 14번
+IAM_ADMIN_WHITELIST = None
+
+# 1.1 테스트/불필요 계정 네이밍 블랙리스트 [확정] — 정적 판정, 외부 확인 불필요
+TEST_ACCOUNT_NAME_PATTERNS = [r"^testuser$", r"^test\d+$"]
+
+# 1.2 IAM 계정-담당자 매핑표(1인 1계정 검증용) [TODO] — 확인요청 표 15번, {user_name: owner_id}
+IAM_ACCOUNT_OWNER_MAP = None
+
+# 1.8 Admin Console Access Key 사용주기 [확정] — AWS Config Rule로 구현(인프라팀 회신 2026-09-10)
+# maxAccessKeyAge=60으로 이미 Terraform 배포됨. 자체 계산 대신 컴플라이언스 상태를 그대로 매핑.
+ACCESS_KEY_ROTATION_CONFIG_RULE = "access-keys-rotated"
 
 # 1.4 IAM 그룹 사용자 화이트리스트 [TODO] — {group_name: [allowed_user_names]}
 IAM_GROUP_WHITELIST = None
@@ -30,6 +40,10 @@ SG_ALLOWED_RULES_WHITELIST = None
 
 # 3.6 NAT 연결 "목적 확인된 리소스" 목록 [TODO] — source/dest check 비활성화 여부는 절대기준으로 자동판정
 NAT_PURPOSE_CONFIRMED_RESOURCES = None
+
+# 3.10⑤ ELB Idle Timeout 기준(초) [TODO] — BE(Payment)-인프라팀 협의 중(60~300초 범위)
+# 나머지 7개 항목(리스너/SSL Policy/액세스로그/Deletion Protection/헬스체크/보안그룹/Cross-Zone)은 확정, 항상 판정
+ELB_IDLE_TIMEOUT_SECONDS = None
 
 # 4.12 로그 보관 기간 최소 기준(일) [확정]
 LOG_RETENTION_MIN_DAYS = 365
