@@ -1,0 +1,81 @@
+---
+# =============================================================================
+# roles/dbms_common — DBMS 점검
+#   - DB 클라이언트 커넥션(TCP) 기반 항목: mysql.yml / postgresql.yml
+#   - 파드 레벨 항목(D-07 구동계정, D-14 설정파일 권한): k8s_pod_checks.yml
+#   전제: group_vars/all.yml 의 dbms_connections 가 채워져 있어야 실제 조회가 동작함.
+#   dbms_connections 가 비어 있어도(DB 구축 전) 적용 대상 D-항목마다 SKIP 행을
+#   1건씩 생성해서, 최종 리포트의 DBMS 시트가 분류표와 행 단위로 대조 가능하도록 한다.
+# =============================================================================
+
+- name: "DBMS 점검 대상 커넥션 존재 여부 확인"
+  ansible.builtin.debug:
+    msg: >-
+      dbms_connections 가 비어있어 실제 DB 조회 대신 SKIP 행만 생성합니다.
+      group_vars/all.yml 에 DB host/port/secret_ref 확정 후 재실행 필요.
+  when: dbms_connections | length == 0
+
+# -----------------------------------------------------------------------------
+# dbms_connections 비어 있을 때: 코드가 작성된 D-항목마다 SKIP 행 1건씩 생성
+#   (D-01,08,09,11,18,21,25 절대기준/버전게이트, D-07,14 파드레벨,
+#    D-02,03,04,05,06,10,17,20 기준값필요 — 전부 포함. 나머지 제외 확정 항목은
+#    build_server_dbms_xlsx.py 에서 별도로 N/A 고정 처리하므로 여기 포함하지 않음)
+# -----------------------------------------------------------------------------
+- name: "DBMS | 커넥션 없을 때 SKIP 행 생성"
+  vars:
+    dbms_coded_items:
+      - {id: 'D-01', item: '기본 계정 비밀번호 변경·잠금'}
+      - {id: 'D-02', item: '불필요 계정 제거'}
+      - {id: 'D-03', item: '비밀번호 사용기간·복잡도'}
+      - {id: 'D-04', item: '관리자 권한 최소 인원'}
+      - {id: 'D-05', item: '비밀번호 재사용 제한'}
+      - {id: 'D-06', item: '계정 개별 부여'}
+      - {id: 'D-07', item: 'root 권한 서비스 구동 제한'}
+      - {id: 'D-08', item: '안전한 암호화 알고리즘 사용'}
+      - {id: 'D-09', item: '로그인 실패 잠금 정책'}
+      - {id: 'D-10', item: '원격 DB 서버 접속 제한'}
+      - {id: 'D-11', item: '시스템 테이블 접근 제한'}
+      - {id: 'D-14', item: '주요 설정·비밀번호 파일 접근 권한'}
+      - {id: 'D-17', item: 'Audit Table 접근 제한'}
+      - {id: 'D-18', item: 'PUBLIC Role 권한 제한'}
+      - {id: 'D-20', item: '인가되지 않은 Object Owner 제한'}
+      - {id: 'D-21', item: 'GRANT OPTION 최소화'}
+      - {id: 'D-25', item: '주기적 보안 패치 적용'}
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': item.id, 'item': item.item, 'status': 'SKIP',
+      'detail': 'DB 파드 미구축 또는 dbms_connections 미설정 — 접속 정보 확정 후 재실행 필요',
+      'target': '해당없음(DB 미구축)'
+    }] }}"
+  loop: "{{ dbms_coded_items }}"
+  loop_control:
+    loop_var: item
+    label: "{{ item.id }}"
+  when: dbms_connections | length == 0
+
+# -----------------------------------------------------------------------------
+# dbms_connections 있을 때: 엔진별 SQL 점검 + 파드레벨 점검 실행
+# -----------------------------------------------------------------------------
+- name: "MySQL 대상 SQL 점검 실행"
+  ansible.builtin.include_tasks: mysql.yml
+  loop: "{{ dbms_connections | selectattr('engine', 'equalto', 'mysql') | list }}"
+  loop_control:
+    loop_var: db_conn
+    label: "{{ db_conn.service }}"
+  when: dbms_connections | length > 0
+
+- name: "PostgreSQL 대상 SQL 점검 실행"
+  ansible.builtin.include_tasks: postgresql.yml
+  loop: "{{ dbms_connections | selectattr('engine', 'equalto', 'postgresql') | list }}"
+  loop_control:
+    loop_var: db_conn
+    label: "{{ db_conn.service }}"
+  when: dbms_connections | length > 0
+
+- name: "파드 레벨 점검(D-07, D-14) 실행"
+  ansible.builtin.include_tasks: k8s_pod_checks.yml
+  loop: "{{ dbms_connections }}"
+  loop_control:
+    loop_var: db_conn
+    label: "{{ db_conn.service }}"
+  when: dbms_connections | length > 0

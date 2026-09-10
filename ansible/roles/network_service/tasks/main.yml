@@ -1,0 +1,731 @@
+---
+# =============================================================================
+# roles/network_service — 서버 U-34~U-61 계열(불필요 서비스·네트워크 서비스) 점검
+#   대상 OS: Amazon Linux 2023 (x86_64, systemd)
+#   공통 패턴: 서비스가 비활성/미설치면 대부분 PASS 또는 N/A. 활성 상태일 때만
+#              세부 설정을 조회하며, 세부 기준값이 TODO인 항목은 SKIP 처리한다.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# U-34 | Finger 서비스 비활성화
+# -----------------------------------------------------------------------------
+- name: "U-34 | finger 서비스 상태 조회"
+  ansible.builtin.shell: "systemctl is-active finger.socket finger.service 2>/dev/null | grep -c '^active' || true"
+  args:
+    executable: /bin/bash
+  register: u34_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-34 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-34', 'item': 'Finger 서비스 비활성화',
+      'status': 'PASS' if (u34_raw.stdout | default('0') | trim == '0') else 'FAIL',
+      'detail': 'finger 서비스 활성 유닛 수: ' ~ (u34_raw.stdout | default('0') | trim)
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-35 | 공유 서비스(Samba)에 대한 익명 접근 제한
+# -----------------------------------------------------------------------------
+- name: "U-35 | smb 서비스 상태 조회"
+  ansible.builtin.shell: "systemctl is-active smb.service 2>/dev/null || echo inactive"
+  args:
+    executable: /bin/bash
+  register: u35_smb_active
+  changed_when: false
+  failed_when: false
+
+- name: "U-35 | smb.conf 게스트 접근 설정 조회"
+  ansible.builtin.shell: "grep -Ei 'guest ok\\s*=\\s*yes|map to guest' /etc/samba/smb.conf 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u35_guest_raw
+  changed_when: false
+  failed_when: false
+  when: "'active' in u35_smb_active.stdout"
+
+- name: "U-35 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-35', 'item': '공유 서비스 익명 접근 제한',
+      'status': (
+        'PASS' if 'active' not in u35_smb_active.stdout else
+        ('FAIL' if (u35_guest_raw.stdout | default('') | length > 0) else 'PASS')
+      ),
+      'detail': (
+        'Samba(smb) 미사용(양호)' if 'active' not in u35_smb_active.stdout
+        else ('게스트 접근 허용 설정 발견: ' ~ u35_guest_raw.stdout if u35_guest_raw.stdout | default('') | length > 0 else 'guest ok 미설정(양호)')
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-36 | r 계열 서비스(rlogin/rsh/rexec) 비활성화
+# -----------------------------------------------------------------------------
+- name: "U-36 | r계열 서비스 상태 조회"
+  ansible.builtin.shell: "systemctl is-active rlogin.socket rsh.socket rexec.socket 2>/dev/null | grep -c '^active' || true"
+  args:
+    executable: /bin/bash
+  register: u36_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-36 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-36', 'item': 'r 계열 서비스 비활성화',
+      'status': 'PASS' if (u36_raw.stdout | default('0') | trim == '0') else 'FAIL',
+      'detail': 'r계열(rlogin/rsh/rexec) 활성 유닛 수: ' ~ (u36_raw.stdout | default('0') | trim)
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-37 | crontab 설정파일 권한 설정
+# -----------------------------------------------------------------------------
+- name: "U-37 | /etc/crontab 상태 조회"
+  ansible.builtin.stat:
+    path: /etc/crontab
+  register: u37_stat
+
+- name: "U-37 | cron.allow 상태 조회"
+  ansible.builtin.command: cat /etc/cron.allow
+  register: u37_allow_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-37 | 판정 기록"
+  vars:
+    u37_perm_ok: "{{ not u37_stat.stat.exists or (u37_stat.stat.mode | int(base=8)) <= (u37_crontab_perm_max | int(base=8)) }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-37', 'item': 'crontab 설정파일 권한 설정',
+      'status': 'PASS' if u37_perm_ok else 'FAIL',
+      'detail': ('/etc/crontab 없음' if not u37_stat.stat.exists else ('mode=' ~ u37_stat.stat.mode ~ ' (기준 <= ' ~ u37_crontab_perm_max ~ ')')) ~
+                ' / cron.allow: ' ~ (u37_allow_raw.stdout | default('없음(기본 전체허용 가능성, 참고 필요)') | trim)
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-38 | DoS 공격에 취약한 서비스 비활성화 (echo/discard/daytime/chargen)
+# -----------------------------------------------------------------------------
+- name: "U-38 | DoS 취약 서비스 상태 조회"
+  ansible.builtin.shell: >
+    systemctl is-active echo.socket echo-udp.socket discard.socket discard-udp.socket
+    daytime.socket daytime-udp.socket chargen.socket chargen-udp.socket 2>/dev/null | grep -c '^active' || true
+  args:
+    executable: /bin/bash
+  register: u38_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-38 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-38', 'item': 'DoS 공격에 취약한 서비스 비활성화',
+      'status': 'PASS' if (u38_raw.stdout | default('0') | trim == '0') else 'FAIL',
+      'detail': 'echo/discard/daytime/chargen 활성 유닛 수: ' ~ (u38_raw.stdout | default('0') | trim)
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-39 | 불필요한 NFS 서비스 비활성화
+# -----------------------------------------------------------------------------
+- name: "U-39 | nfs-server 상태 조회"
+  ansible.builtin.shell: "systemctl is-active nfs-server.service 2>/dev/null || echo inactive"
+  args:
+    executable: /bin/bash
+  register: u39_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-39 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-39', 'item': '불필요한 NFS 서비스 비활성화',
+      'status': 'PASS' if 'active' not in u39_raw.stdout else 'FAIL',
+      'detail': 'nfs-server: ' ~ (u39_raw.stdout | trim)
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-40 | NFS 접근 통제 [기준값필요: u40_nfs_allowed_hosts, NFS 비활성 시 N/A]
+# -----------------------------------------------------------------------------
+- name: "U-40 | /etc/exports 조회"
+  ansible.builtin.command: cat /etc/exports
+  register: u40_exports_raw
+  changed_when: false
+  failed_when: false
+  when: "'active' in u39_raw.stdout"
+
+- name: "U-40 | /etc/exports 권한 조회"
+  ansible.builtin.stat:
+    path: /etc/exports
+  register: u40_exports_stat
+  when: "'active' in u39_raw.stdout"
+
+- name: "U-40 | 판정 기록"
+  vars:
+    u40_content: "{{ u40_exports_raw.stdout | default('') }}"
+    u40_has_wildcard: "{{ '*' in u40_content or '(rw)' in u40_content.replace(' ', '') }}"
+    u40_perm_ok: "{{ (u40_exports_stat.stat.mode | default('0644') | int(base=8)) <= (u40_exports_perm_max | int(base=8)) if u40_exports_stat.stat is defined and u40_exports_stat.stat.exists else true }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-40', 'item': 'NFS 접근 통제',
+      'status': (
+        'N/A' if 'active' not in u39_raw.stdout else
+        ('FAIL' if (u40_has_wildcard or not u40_perm_ok) else
+         ('SKIP' if u40_nfs_allowed_hosts is none else 'PASS'))
+      ),
+      'detail': (
+        'NFS 미사용(해당없음)' if 'active' not in u39_raw.stdout
+        else ('exports 내용: ' ~ (u40_content | default('없음') | truncate(150)) ~
+              (' — 허용호스트 화이트리스트(u40_nfs_allowed_hosts) TODO' if u40_nfs_allowed_hosts is none else ''))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-41 | 불필요한 automountd 제거
+# -----------------------------------------------------------------------------
+- name: "U-41 | autofs 상태 조회"
+  ansible.builtin.shell: "systemctl is-active autofs.service 2>/dev/null || echo inactive"
+  args:
+    executable: /bin/bash
+  register: u41_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-41 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-41', 'item': '불필요한 automountd 제거',
+      'status': 'PASS' if 'active' not in u41_raw.stdout else 'FAIL',
+      'detail': 'autofs: ' ~ (u41_raw.stdout | trim)
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-42 | 불필요한 RPC 서비스 비활성화 [확정 기준값: group_vars/all.yml]
+# -----------------------------------------------------------------------------
+- name: "U-42 | RPC 서비스별 상태 조회"
+  ansible.builtin.shell: "systemctl is-active {{ item }} 2>/dev/null || echo inactive"
+  args:
+    executable: /bin/bash
+  register: u42_results
+  changed_when: false
+  failed_when: false
+  loop: "{{ u42_unnecessary_rpc_services }}"
+
+- name: "U-42 | 판정 기록"
+  vars:
+    u42_active: "{{ u42_results.results | selectattr('stdout', 'search', 'active') | rejectattr('stdout', 'search', 'inactive') | map(attribute='item') | list }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-42', 'item': '불필요한 RPC 서비스 비활성화',
+      'status': 'PASS' if u42_active | length == 0 else 'FAIL',
+      'detail': '활성 RPC 서비스: ' ~ (u42_active | join(', ') if u42_active | length > 0 else '없음')
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-43 | NIS, NIS+ 점검
+# -----------------------------------------------------------------------------
+- name: "U-43 | NIS 서비스 상태 조회"
+  ansible.builtin.shell: "systemctl is-active ypbind.service ypserv.service yppasswdd.service 2>/dev/null | grep -c '^active' || true"
+  args:
+    executable: /bin/bash
+  register: u43_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-43 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-43', 'item': 'NIS, NIS+ 점검',
+      'status': 'PASS' if (u43_raw.stdout | default('0') | trim == '0') else 'FAIL',
+      'detail': 'NIS(ypbind/ypserv/yppasswdd) 활성 유닛 수: ' ~ (u43_raw.stdout | default('0') | trim)
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-44 | tftp, talk 서비스 비활성화
+# -----------------------------------------------------------------------------
+- name: "U-44 | tftp/talk 서비스 상태 조회"
+  ansible.builtin.shell: "systemctl is-active tftp.socket talk.socket ntalk.socket 2>/dev/null | grep -c '^active' || true"
+  args:
+    executable: /bin/bash
+  register: u44_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-44 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-44', 'item': 'tftp, talk 서비스 비활성화',
+      'status': 'PASS' if (u44_raw.stdout | default('0') | trim == '0') else 'FAIL',
+      'detail': 'tftp/talk/ntalk 활성 유닛 수: ' ~ (u44_raw.stdout | default('0') | trim)
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-45 | 메일 서비스 버전 점검 [기준값필요: u45_mail_latest_version, 미사용시 N/A]
+# -----------------------------------------------------------------------------
+- name: "U-45 | 메일 서비스 상태 조회"
+  ansible.builtin.shell: "systemctl is-active postfix.service sendmail.service 2>/dev/null | grep -c '^active' || true"
+  args:
+    executable: /bin/bash
+  register: u45_active_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-45 | 메일 서비스 버전 조회"
+  ansible.builtin.command: postconf mail_version
+  register: u45_version_raw
+  changed_when: false
+  failed_when: false
+  when: (u45_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-45 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-45', 'item': '메일 서비스 버전 점검',
+      'status': (
+        'N/A' if (u45_active_raw.stdout | default('0') | trim) == '0' else
+        ('SKIP' if u45_mail_latest_version is none else
+         ('PASS' if u45_mail_latest_version in (u45_version_raw.stdout | default('')) else 'FAIL'))
+      ),
+      'detail': (
+        '메일 서비스 미사용(해당없음)' if (u45_active_raw.stdout | default('0') | trim) == '0'
+        else ('현재 버전: ' ~ (u45_version_raw.stdout | default('조회 실패')) ~
+              (' — 최신버전 기준(u45_mail_latest_version) TODO' if u45_mail_latest_version is none else ''))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-46 | 일반 사용자의 메일 서비스 실행 방지
+# -----------------------------------------------------------------------------
+- name: "U-46 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-46', 'item': '일반 사용자의 메일 서비스 실행 방지',
+      'status': 'PASS' if (u45_active_raw.stdout | default('0') | trim) == '0' else 'SKIP',
+      'detail': (
+        '메일 서비스 미사용(자동 양호)' if (u45_active_raw.stdout | default('0') | trim) == '0'
+        else '메일 서비스 사용 중 — submission 권한 세부 옵션 수동 확인 권장'
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-47 | 스팸 메일 릴레이 제한 [기준값필요: u47_relay_allowed_list, 미사용시 N/A]
+# -----------------------------------------------------------------------------
+- name: "U-47 | mynetworks 설정 조회"
+  ansible.builtin.command: postconf mynetworks
+  register: u47_raw
+  changed_when: false
+  failed_when: false
+  when: (u45_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-47 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-47', 'item': '스팸 메일 릴레이 제한',
+      'status': (
+        'N/A' if (u45_active_raw.stdout | default('0') | trim) == '0' else
+        ('SKIP' if u47_relay_allowed_list is none else
+         ('FAIL' if '0.0.0.0/0' in (u47_raw.stdout | default('')) else 'PASS'))
+      ),
+      'detail': (
+        '메일 서비스 미사용(해당없음)' if (u45_active_raw.stdout | default('0') | trim) == '0'
+        else ('mynetworks: ' ~ (u47_raw.stdout | default('조회 실패')) ~
+              (' — 릴레이 허용목록(u47_relay_allowed_list) TODO' if u47_relay_allowed_list is none else ''))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-48 | expn, vrfy 명령어 제한
+# -----------------------------------------------------------------------------
+- name: "U-48 | disable_vrfy_command 설정 조회"
+  ansible.builtin.command: postconf disable_vrfy_command
+  register: u48_raw
+  changed_when: false
+  failed_when: false
+  when: (u45_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-48 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-48', 'item': 'expn, vrfy 명령어 제한',
+      'status': (
+        'PASS' if (u45_active_raw.stdout | default('0') | trim) == '0' else
+        ('PASS' if 'yes' in (u48_raw.stdout | default('')) else 'FAIL')
+      ),
+      'detail': (
+        '메일 서비스 미사용(해당없음, 자동 양호)' if (u45_active_raw.stdout | default('0') | trim) == '0'
+        else 'disable_vrfy_command: ' ~ (u48_raw.stdout | default('조회 실패'))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-49 | DNS 보안 버전 패치 [기준값필요: u49_dns_patch_baseline, 미사용시 N/A]
+# -----------------------------------------------------------------------------
+- name: "U-49 | named(bind) 상태 조회"
+  ansible.builtin.shell: "systemctl is-active named.service 2>/dev/null | grep -c '^active' || true"
+  args:
+    executable: /bin/bash
+  register: u49_active_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-49 | BIND 버전 조회"
+  ansible.builtin.command: named -v
+  register: u49_version_raw
+  changed_when: false
+  failed_when: false
+  when: (u49_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-49 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-49', 'item': 'DNS 보안 버전 패치',
+      'status': (
+        'N/A' if (u49_active_raw.stdout | default('0') | trim) == '0' else
+        ('SKIP' if u49_dns_patch_baseline is none else
+         ('PASS' if u49_dns_patch_baseline in (u49_version_raw.stdout | default('')) else 'FAIL'))
+      ),
+      'detail': (
+        'DNS(named) 미사용(해당없음)' if (u49_active_raw.stdout | default('0') | trim) == '0'
+        else ('현재 버전: ' ~ (u49_version_raw.stdout | default('조회 실패')) ~
+              (' — 최신 패치 기준(u49_dns_patch_baseline) TODO' if u49_dns_patch_baseline is none else ''))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-50 | DNS Zone Transfer 설정 [기준값필요: u50_dns_allowed_secondaries, 미사용시 N/A]
+# -----------------------------------------------------------------------------
+- name: "U-50 | allow-transfer 설정 조회"
+  ansible.builtin.shell: "grep -A2 'allow-transfer' /etc/named.conf 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u50_raw
+  changed_when: false
+  failed_when: false
+  when: (u49_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-50 | 판정 기록"
+  vars:
+    u50_content: "{{ u50_raw.stdout | default('') }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-50', 'item': 'DNS Zone Transfer 설정',
+      'status': (
+        'N/A' if (u49_active_raw.stdout | default('0') | trim) == '0' else
+        ('FAIL' if (u50_content | length == 0 or 'any' in u50_content) else
+         ('SKIP' if u50_dns_allowed_secondaries is none else 'PASS'))
+      ),
+      'detail': (
+        'DNS 미사용(해당없음)' if (u49_active_raw.stdout | default('0') | trim) == '0'
+        else 'allow-transfer 설정: ' ~ (u50_content | default('미설정(기본 전체허용, 취약)') | truncate(150))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-51 | DNS 서비스의 취약한 동적 업데이트 설정 금지 [기준값필요: u51_dns_dynamic_update_allowed]
+# -----------------------------------------------------------------------------
+- name: "U-51 | allow-update 설정 조회"
+  ansible.builtin.shell: "grep -A2 'allow-update' /etc/named.conf 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u51_raw
+  changed_when: false
+  failed_when: false
+  when: (u49_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-51 | 판정 기록"
+  vars:
+    u51_content: "{{ u51_raw.stdout | default('') }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-51', 'item': 'DNS 동적 업데이트 설정 금지',
+      'status': (
+        'N/A' if (u49_active_raw.stdout | default('0') | trim) == '0' else
+        ('PASS' if u51_content | length == 0 else
+         ('FAIL' if 'any' in u51_content else
+          ('SKIP' if u51_dns_dynamic_update_allowed is none else 'PASS')))
+      ),
+      'detail': (
+        'DNS 미사용(해당없음)' if (u49_active_raw.stdout | default('0') | trim) == '0'
+        else 'allow-update 설정: ' ~ (u51_content | default('미설정(동적업데이트 비활성, 양호)') | truncate(150))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-52 | Telnet 서비스 비활성화
+# -----------------------------------------------------------------------------
+- name: "U-52 | telnet 서비스 상태 조회"
+  ansible.builtin.shell: "systemctl is-active telnet.socket 2>/dev/null || echo inactive"
+  args:
+    executable: /bin/bash
+  register: u52_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-52 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-52', 'item': 'Telnet 서비스 비활성화',
+      'status': 'PASS' if 'active' not in u52_raw.stdout else 'FAIL',
+      'detail': 'telnet.socket: ' ~ (u52_raw.stdout | trim)
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-53 | FTP 서비스 정보 노출 제한 (vsftpd 배너)
+# -----------------------------------------------------------------------------
+- name: "U-53 | vsftpd 상태 조회"
+  ansible.builtin.shell: "systemctl is-active vsftpd.service 2>/dev/null | grep -c '^active' || true"
+  args:
+    executable: /bin/bash
+  register: u53_active_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-53 | vsftpd 배너 설정 조회"
+  ansible.builtin.shell: "grep -Ei '^\\s*ftpd_banner' /etc/vsftpd/vsftpd.conf 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u53_raw
+  changed_when: false
+  failed_when: false
+  when: (u53_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-53 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-53', 'item': 'FTP 서비스 정보 노출 제한',
+      'status': (
+        'N/A' if (u53_active_raw.stdout | default('0') | trim) == '0' else
+        ('PASS' if (u53_raw.stdout | default('') | length > 0) else 'FAIL')
+      ),
+      'detail': (
+        'FTP(vsftpd) 미사용(해당없음)' if (u53_active_raw.stdout | default('0') | trim) == '0'
+        else ('ftpd_banner 설정: ' ~ (u53_raw.stdout | default('미설정(기본 배너 노출, 취약)')))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-54 | 암호화되지 않은 FTP 서비스 비활성화 (SSL 강제)
+# -----------------------------------------------------------------------------
+- name: "U-54 | vsftpd SSL 설정 조회"
+  ansible.builtin.shell: "grep -Ei '^\\s*ssl_enable' /etc/vsftpd/vsftpd.conf 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u54_raw
+  changed_when: false
+  failed_when: false
+  when: (u53_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-54 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-54', 'item': '암호화되지 않은 FTP 서비스 비활성화',
+      'status': (
+        'N/A' if (u53_active_raw.stdout | default('0') | trim) == '0' else
+        ('PASS' if 'YES' in (u54_raw.stdout | default('') | upper) else 'FAIL')
+      ),
+      'detail': (
+        'FTP(vsftpd) 미사용(해당없음)' if (u53_active_raw.stdout | default('0') | trim) == '0'
+        else 'ssl_enable 설정: ' ~ (u54_raw.stdout | default('미설정(평문 FTP, 취약)'))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-55 | FTP 계정 Shell 제한
+# -----------------------------------------------------------------------------
+- name: "U-55 | ftp 계정 shell 조회"
+  ansible.builtin.shell: "getent passwd ftp"
+  register: u55_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-55 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-55', 'item': 'FTP 계정 Shell 제한',
+      'status': (
+        'N/A' if u55_raw.rc != 0 else
+        ('PASS' if (u55_raw.stdout is search('nologin|/bin/false')) else 'FAIL')
+      ),
+      'detail': 'ftp 계정 없음(해당없음)' if u55_raw.rc != 0 else u55_raw.stdout
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-56 | FTP 서비스 접근 제어 설정 [기준값필요: u56_ftp_allowed_hosts, 미사용시 N/A]
+# -----------------------------------------------------------------------------
+- name: "U-56 | tcp_wrappers vsftpd 설정 조회"
+  ansible.builtin.shell: "grep -h vsftpd /etc/hosts.allow /etc/hosts.deny 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u56_raw
+  changed_when: false
+  failed_when: false
+  when: (u53_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-56 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-56', 'item': 'FTP 서비스 접근 제어 설정',
+      'status': (
+        'N/A' if (u53_active_raw.stdout | default('0') | trim) == '0' else
+        ('SKIP' if u56_ftp_allowed_hosts is none else
+         ('PASS' if (u56_raw.stdout | default('') | length > 0) else 'FAIL'))
+      ),
+      'detail': (
+        'FTP(vsftpd) 미사용(해당없음)' if (u53_active_raw.stdout | default('0') | trim) == '0'
+        else ('hosts.allow/deny vsftpd 설정: ' ~ (u56_raw.stdout | default('없음')) ~
+              (' — 허용IP목록(u56_ftp_allowed_hosts) TODO' if u56_ftp_allowed_hosts is none else ''))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-57 | Ftpusers 파일 설정 (root 접속 차단)
+# -----------------------------------------------------------------------------
+- name: "U-57 | ftpusers 파일 조회"
+  ansible.builtin.shell: "cat /etc/vsftpd/ftpusers /etc/vsftpd.ftpusers /etc/ftpusers 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u57_raw
+  changed_when: false
+  failed_when: false
+  when: (u53_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-57 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-57', 'item': 'Ftpusers 파일 설정',
+      'status': (
+        'N/A' if (u53_active_raw.stdout | default('0') | trim) == '0' else
+        ('PASS' if 'root' in (u57_raw.stdout | default('')) else 'FAIL')
+      ),
+      'detail': (
+        'FTP(vsftpd) 미사용(해당없음)' if (u53_active_raw.stdout | default('0') | trim) == '0'
+        else 'ftpusers 내용: ' ~ (u57_raw.stdout | default('파일 없음(취약)') | truncate(150))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-58 | 불필요한 SNMP 서비스 구동 점검
+# -----------------------------------------------------------------------------
+- name: "U-58 | snmpd 상태 조회"
+  ansible.builtin.shell: "systemctl is-active snmpd.service 2>/dev/null | grep -c '^active' || true"
+  args:
+    executable: /bin/bash
+  register: u58_active_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-58 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-58', 'item': '불필요한 SNMP 서비스 구동 점검',
+      'status': 'PASS' if (u58_active_raw.stdout | default('0') | trim) == '0' else 'FAIL',
+      'detail': (
+        'SNMP 미사용(양호)' if (u58_active_raw.stdout | default('0') | trim) == '0'
+        else 'snmpd 서비스 활성 — 모니터링 목적 운영 중이라면 예외처리 검토 필요'
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-59 | 안전한 SNMP 버전 사용 (v3 이상)
+# -----------------------------------------------------------------------------
+- name: "U-59 | snmpd.conf v1/v2c 설정 조회"
+  ansible.builtin.shell: "grep -Ei '^\\s*(rocommunity|rwcommunity)\\b' /etc/snmp/snmpd.conf 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u59_raw
+  changed_when: false
+  failed_when: false
+  when: (u58_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-59 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-59', 'item': '안전한 SNMP 버전 사용',
+      'status': (
+        'N/A' if (u58_active_raw.stdout | default('0') | trim) == '0' else
+        ('FAIL' if (u59_raw.stdout | default('') | length > 0) else 'PASS')
+      ),
+      'detail': (
+        'SNMP 미사용(해당없음)' if (u58_active_raw.stdout | default('0') | trim) == '0'
+        else ('v1/v2c community 설정 발견: ' ~ u59_raw.stdout if u59_raw.stdout | default('') | length > 0 else 'v1/v2c 설정 없음(v3 사용 추정, 양호)')
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-60 | SNMP Community String 복잡성 설정
+# -----------------------------------------------------------------------------
+- name: "U-60 | 판정 기록"
+  vars:
+    u60_communities: "{{ (u59_raw.stdout | default('')).split('\n') | map('regex_replace', '^\\S+\\s+', '') | map('trim') | select('string') | list }}"
+    u60_blacklisted: "{{ u60_communities | select('in', u60_snmp_community_blacklist) | list }}"
+    u60_weak: "{{ u60_communities | reject('regex', '^(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{10,}$|^(?=.*[A-Za-z])(?=.*[0-9])(?=.*[^A-Za-z0-9]).{8,}$') | list }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-60', 'item': 'SNMP Community String 복잡성 설정',
+      'status': (
+        'N/A' if (u58_active_raw.stdout | default('0') | trim) == '0' else
+        ('PASS' if (u60_blacklisted | length == 0 and u60_weak | length == 0) else 'FAIL')
+      ),
+      'detail': (
+        'SNMP 미사용(해당없음)' if (u58_active_raw.stdout | default('0') | trim) == '0'
+        else '취약 community string 존재 여부(값 자체는 마스킹): blacklist 매치 ' ~ (u60_blacklisted | length | string) ~ '건, 복잡도 미달 ' ~ (u60_weak | length | string) ~ '건'
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-61 | SNMP Access Control 설정 [기준값필요: u61_snmp_allowed_hosts, 미사용시 N/A]
+# -----------------------------------------------------------------------------
+- name: "U-61 | snmpd.conf com2sec 설정 조회"
+  ansible.builtin.shell: "grep -Ei '^\\s*com2sec\\b' /etc/snmp/snmpd.conf 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u61_raw
+  changed_when: false
+  failed_when: false
+  when: (u58_active_raw.stdout | default('0') | trim) != '0'
+
+- name: "U-61 | 판정 기록"
+  vars:
+    u61_content: "{{ u61_raw.stdout | default('') }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-61', 'item': 'SNMP Access Control 설정',
+      'status': (
+        'N/A' if (u58_active_raw.stdout | default('0') | trim) == '0' else
+        ('FAIL' if (u61_content | length == 0 or 'default' in u61_content) else
+         ('SKIP' if u61_snmp_allowed_hosts is none else 'PASS'))
+      ),
+      'detail': (
+        'SNMP 미사용(해당없음)' if (u58_active_raw.stdout | default('0') | trim) == '0'
+        else 'com2sec 설정: ' ~ (u61_content | default('미설정(전체허용, 취약)') | truncate(150))
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-65 | NTP 및 시각 동기화 설정 [기준값필요: u65_ntp_allowed_servers]
+#   Amazon Linux 2023 기본: chrony
+# -----------------------------------------------------------------------------
+- name: "U-65 | chrony 설정 서버 조회"
+  ansible.builtin.shell: "set -o pipefail && grep -E '^\\s*(server|pool)\\s' /etc/chrony.conf 2>/dev/null | awk '{print $2}'"
+  args:
+    executable: /bin/bash
+  register: u65_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-65 | 판정 기록"
+  vars:
+    u65_servers: "{{ u65_raw.stdout_lines | default([]) }}"
+    u65_unauthorized: "{{ u65_servers | difference(u65_ntp_allowed_servers | default([])) }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-65', 'item': 'NTP 및 시각 동기화 설정',
+      'status': (
+        'FAIL' if u65_servers | length == 0 else
+        ('SKIP' if u65_ntp_allowed_servers is none else ('PASS' if u65_unauthorized | length == 0 else 'FAIL'))
+      ),
+      'detail': (
+        'NTP 서버 설정 없음(시각 동기화 미설정, 취약)' if u65_servers | length == 0
+        else '설정된 NTP 서버: ' ~ (u65_servers | join(', ')) ~
+             (' — 허용목록(u65_ntp_allowed_servers) TODO' if u65_ntp_allowed_servers is none else '')
+      )
+    }] }}"

@@ -1,0 +1,20 @@
+# =============================================================================
+# 인벤토리 예시 — SSM 커넥션 기반 (SSH 키 미사용)
+#   실제 인스턴스 ID는 점검 당일 인프라팀이 제공 예정(보안 검수 사전 요청 폼 #1)
+#   EKS 워커노드(On-Demand + Spot)와 NAT 인스턴스 2대가 대상.
+# =============================================================================
+
+[server_targets]
+; worker-node-1 ansible_host=i-xxxxxxxxxxxxxxxxx
+; worker-node-2 ansible_host=i-yyyyyyyyyyyyyyyyy
+; nat-instance-a ansible_host=i-zzzzzzzzzzzzzzzzz
+; nat-instance-c ansible_host=i-wwwwwwwwwwwwwwwww
+
+[server_targets:vars]
+ansible_connection=aws_ssm
+ansible_aws_ssm_bucket_name=<S3버킷명>   ; SSM 파일 전송용 버킷 (인프라팀 확인 필요)
+ansible_aws_ssm_region=ap-northeast-2
+ansible_python_interpreter=/usr/bin/python3
+ansible_become=true
+ansible_become_method=sudo
+; ssm-user 는 NOPASSWD sudo 매핑 확인됨(인프라팀 회신) — become_pass 불필요
