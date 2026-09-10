@@ -1,0 +1,9 @@
+.vagrant/
+.ssh/
+*.log
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfplan
+terraform/tfplan.out
+terraform/.terraform.lock.hcl
