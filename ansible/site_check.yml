@@ -22,7 +22,20 @@
     - account_auth
     - file_permission
     - network_service
+    - log_patch_check
   tasks:
+    - name: "U-66 | 시스템 로깅 정책(로그그룹 보관기간) 점검 — mgmt 서버 AWS API 조회"
+      ansible.builtin.include_role:
+        name: log_patch_check
+        tasks_from: log_retention_check
+      vars:
+        lrc_item_id: "U-66"
+        lrc_item_name: "정책에 따른 시스템 로깅 설정"
+        lrc_log_group_name: "{{ u66_log_group_name }}"
+        lrc_target: "전체(CloudWatch 로그그룹)"
+        lrc_min_days: "{{ u66_log_retention_min_days | default(365) }}"
+      run_once: true
+
     - name: "결과 요약 출력"
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }} — PASS {{ check_results | selectattr('status','equalto','PASS') | list | length }} / FAIL {{ check_results | selectattr('status','equalto','FAIL') | list | length }} / 총 {{ check_results | length }}"

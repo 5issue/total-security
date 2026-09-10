@@ -50,7 +50,7 @@
 
 - name: "{{ db_conn.service }} | D-02 판정 기록"
   vars:
-    d02_accounts: "{{ d02_raw.query_result | default([]) | map(attribute='0.rolname') | list }}"
+    d02_accounts: "{{ d02_raw.query_result | default([]) | map(attribute='rolname') | list }}"
     d02_unauthorized: "{{ d02_accounts | difference(d02_unnecessary_account_whitelist | default([])) if d02_unnecessary_account_whitelist else [] }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
@@ -108,7 +108,7 @@
 
 - name: "{{ db_conn.service }} | D-04 판정 기록"
   vars:
-    d04_admins: "{{ d04_raw.query_result | default([]) | map(attribute='0.rolname') | list }}"
+    d04_admins: "{{ d04_raw.query_result | default([]) | map(attribute='rolname') | list }}"
     d04_unauthorized: "{{ d04_admins | difference(d04_admin_account_whitelist | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
@@ -147,7 +147,7 @@
 
 - name: "{{ db_conn.service }} | D-06 판정 기록"
   vars:
-    d06_users: "{{ d06_raw.query_result | default([]) | map(attribute='0.rolname') | list }}"
+    d06_users: "{{ d06_raw.query_result | default([]) | map(attribute='rolname') | list }}"
     d06_flagged: "{{ d06_users | select('regex', (d06_shared_account_name_patterns | default([]) | join('|'))) | list if d06_shared_account_name_patterns else [] }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
@@ -177,7 +177,7 @@
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-08', 'item': '안전한 암호화 알고리즘 사용', 'target': db_conn.service,
-      'status': 'PASS' if (d08_raw.query_result is defined and 'scram-sha-256' in (d08_raw.query_result[0][0].values() | first)) else 'FAIL',
+      'status': 'PASS' if (d08_raw.query_result is defined and 'scram-sha-256' in (d08_raw.query_result[0].values() | first)) else 'FAIL',
       'detail': d08_raw.query_result | default('조회 실패') | string | truncate(150)
     }] }}"
 
@@ -192,32 +192,8 @@
       'detail': 'PostgreSQL 네이티브 미지원 — connection pooler/외부 도구 필요(추가 설계 시 재검토)'
     }] }}"
 
-# -----------------------------------------------------------------------------
-# D-10 | 원격 DB 서버 접속 제한 [절대기준 부분(0.0.0.0/0) + 기준값필요(화이트리스트)]
-#   pg_hba.conf 는 파일시스템 접근이 필요해 조회가 제한적 — SHOW hba_file 경로만
-#   참고 표시하고, 실제 판정은 D-14(설정파일 권한, k8s_pod_checks.yml)와 함께
-#   파드레벨에서 pg_hba.conf 를 직접 조회하는 방식으로 보완 예정.
-# -----------------------------------------------------------------------------
-- name: "{{ db_conn.service }} | D-10 hba_file 경로 조회"
-  community.postgresql.postgresql_query:
-    login_host: "{{ db_conn.host }}"
-    login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
-    db: postgres
-    query: "SHOW hba_file"
-  register: d10_raw
-  failed_when: false
-
-- name: "{{ db_conn.service }} | D-10 판정 기록"
-  ansible.builtin.set_fact:
-    check_results: "{{ check_results + [{
-      'id': 'D-10', 'item': '원격 DB 서버 접속 제한', 'target': db_conn.service,
-      'status': 'SKIP' if d10_allowed_client_hosts is none else 'REVIEW',
-      'detail': 'pg_hba.conf 경로: ' ~ (d10_raw.query_result | default('조회 실패') | string) ~
-                ' — 파일 내용은 파드레벨 점검(k8s_pod_checks.yml)에서 대조 필요' ~
-                (' / 허용목록(d10_allowed_client_hosts) TODO' if d10_allowed_client_hosts is none else '')
-    }] }}"
+# D-10(원격 DB 서버 접속 제한)은 2026-09-09 인프라팀 확인으로 IP 허용목록이 아니라
+# K8s NetworkPolicy 기반으로 변경됨 — roles/dbms_common/tasks/k8s_pod_checks.yml 참고(spec 2.3절).
 
 # -----------------------------------------------------------------------------
 # D-11 | 시스템 테이블(pg_catalog) 접근 제한
@@ -259,7 +235,7 @@
 
 - name: "{{ db_conn.service }} | D-17 판정 기록"
   vars:
-    d17_libs: "{{ (d17_raw.query_result[0][0].values() | first) if d17_raw.query_result is defined else '' }}"
+    d17_libs: "{{ (d17_raw.query_result[0].values() | first) if d17_raw.query_result is defined else '' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-17', 'item': 'Audit Table은 데이터베이스 관리자 계정으로 접근하도록 제한', 'target': db_conn.service,
@@ -307,7 +283,7 @@
 
 - name: "{{ db_conn.service }} | D-20 판정 기록"
   vars:
-    d20_owners: "{{ d20_raw.query_result | default([]) | map(attribute='0.tableowner') | list }}"
+    d20_owners: "{{ d20_raw.query_result | default([]) | map(attribute='tableowner') | list }}"
     d20_unauthorized: "{{ d20_owners | difference(d20_admin_owner_whitelist | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{

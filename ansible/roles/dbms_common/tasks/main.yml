@@ -79,3 +79,20 @@
     loop_var: db_conn
     label: "{{ db_conn.service }}"
   when: dbms_connections | length > 0
+
+# -----------------------------------------------------------------------------
+# D-26 | 감사기록 보관기간 — DB 접속(dbms_connections) 여부와 무관하게 항상 실행
+#   (CloudWatch 로그그룹 조회이지 DB 쿼리가 아님). U-66과 동일 원칙·로직 공유
+#   (roles/log_patch_check/tasks/log_retention_check.yml, spec 2.3절).
+# -----------------------------------------------------------------------------
+- name: "D-26 | DBMS 감사기록 보관기간 점검 — mgmt 서버 AWS API 조회"
+  ansible.builtin.include_role:
+    name: log_patch_check
+    tasks_from: log_retention_check
+  vars:
+    lrc_item_id: "D-26"
+    lrc_item_name: "데이터베이스의 접근, 변경, 삭제 등의 감사 기록이 기관의 감사 기록 정책에 적합하도록 설정"
+    lrc_log_group_name: "{{ d26_audit_log_group_name }}"
+    lrc_target: "전체(DBMS 감사로그)"
+    lrc_min_days: 365
+  run_once: true

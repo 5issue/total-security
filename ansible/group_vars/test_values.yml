@@ -28,8 +28,20 @@ d04_admin_account_whitelist: ["root", "postgres"]
 d05_applicable: true
 d05_password_reuse_limit: 5
 d06_shared_account_name_patterns: ["test", "temp", "guest", "common"]
-d10_allowed_client_hosts: ["10.0.%"]
 d20_admin_owner_whitelist: ["postgres"]
+
+# U-64/U-66/D-26 — 2026-09-10 재분류(제외→자동판정가능(부분)) 로직 검증용 테스트값.
+# ⚠ u64는 실제 EC2+SSM Patch Manager 대상이 아니면 AWS CLI 조회가 실패해도 정상(SKIP성 처리 확인용).
+# u66/d26 로그그룹은 실제로 존재하지 않아도 "로그그룹 없음→FAIL" 분기가 타는지 확인하는 용도.
+u64_ssm_patch_manager_confirmed: true
+u66_log_group_name: "/test/infracheck/sudo-session"
+d26_audit_log_group_name: "/test/infracheck/dbms-audit"
+
+# D-10 (NetworkPolicy 라벨) — test/k8s kind 클러스터 로컬 테스트 전용 임의값.
+# test/k8s/networkpolicies.yaml 의 PASS 케이스 NetworkPolicy가 허용하는 ingress from 라벨과 일치해야 함.
+d10_allowed_np_label:
+  key: role
+  value: db-client
 
 # -----------------------------------------------------------------------------
 # 로컬 Vagrant 테스트(VM3=dbms) 접속 정보 — test/Vagrantfile, test/provision/dbms_target.sh 참고
@@ -55,3 +67,22 @@ dbms_connections:
     secret_ref: null
     namespace: null
     pod_label_selector: null
+  # D-10(NetworkPolicy) 로컬 검증 전용 — kind 클러스터(test/k8s) 안의 더미 파드 대상.
+  # engine을 mysql/postgresql이 아닌 값으로 둬서 SQL 점검(mysql.yml/postgresql.yml)은 타지 않고
+  # k8s_pod_checks.yml(D-07/D-14/D-10)만 이 두 엔트리를 대상으로 실행되게 함.
+  # ⚠ 호스트 메모리 부족으로 VM 3대 + kind 동시 실행이 어려워 단계별 테스트 중 —
+  #   1단계(VM만) 실행 시에는 주석 처리, 2단계(kind만) 실행 시 다시 해제.
+  # - service: kind-d10-pass-case
+  #   engine: networkpolicy-test
+  #   host: null
+  #   port: null
+  #   secret_ref: null
+  #   namespace: infracheck-test
+  #   pod_label_selector: "app=mock-db-pass"
+  # - service: kind-d10-fail-case
+  #   engine: networkpolicy-test
+  #   host: null
+  #   port: null
+  #   secret_ref: null
+  #   namespace: infracheck-test
+  #   pod_label_selector: "app=mock-db-fail"

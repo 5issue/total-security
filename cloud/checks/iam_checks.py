@@ -1,8 +1,64 @@
 """1.x, 2.x — IAM 사용자·그룹·정책 관리 점검."""
+import csv
+import io
+import re
+import time
+
 import config
-from .common import age_in_days, make_result, safe_call
+from .common import make_result, safe_call
 
 IDENTITY_TAG_KEYS = {"name", "email", "dept", "department", "부서", "이름", "이메일"}
+ADMIN_POLICY_ARN = "arn:aws:iam::aws:policy/AdministratorAccess"
+
+
+def check_1_1_user_account_management(iam):
+    users, err = safe_call(iam.list_users)
+    if err:
+        return [make_result("1.1", "사용자 계정 관리", "SKIP", f"IAM 사용자 목록 조회 실패: {err}")]
+    ungrouped_admins = []
+    for u in users["Users"]:
+        name = u["UserName"]
+        groups, gerr = safe_call(iam.list_groups_for_user, UserName=name)
+        if gerr or groups["Groups"]:
+            continue  # 그룹 소속이면 그룹을 통한 권한관리로 간주(정상)
+        policies, perr = safe_call(iam.list_attached_user_policies, UserName=name)
+        if not perr and any(p["PolicyArn"] == ADMIN_POLICY_ARN for p in policies["AttachedPolicies"]):
+            ungrouped_admins.append(name)
+
+    # ② 테스트/불필요 계정 네이밍 블랙리스트 — 정적 판정, 화이트리스트 여부와 무관하게 항상 확인
+    all_names = [u["UserName"] for u in users["Users"]]
+    blacklisted = [n for n in all_names if any(re.match(p, n) for p in config.TEST_ACCOUNT_NAME_PATTERNS)]
+
+    if blacklisted:
+        status = "FAIL"
+        detail = f"테스트/불필요 계정 존재: {', '.join(blacklisted)}"
+    elif config.IAM_ADMIN_WHITELIST is None:
+        status = "SKIP"
+        detail = ("업무상 인가된 관리자 화이트리스트(config.IAM_ADMIN_WHITELIST) 미확정 — "
+                   f"그룹 미소속+AdministratorAccess 직접보유 계정(참고용): "
+                   f"{', '.join(ungrouped_admins) if ungrouped_admins else '없음'}")
+    else:
+        unauthorized = [n for n in ungrouped_admins if n not in config.IAM_ADMIN_WHITELIST]
+        status = "PASS" if not unauthorized else "FAIL"
+        detail = "화이트리스트 외 그룹 미소속 AdministratorAccess 직접보유 계정: " + \
+                  (", ".join(unauthorized) if unauthorized else "없음")
+    return [make_result("1.1", "사용자 계정 관리", status, detail)]
+
+
+def check_1_2_iam_single_account(iam):
+    if config.IAM_ACCOUNT_OWNER_MAP is None:
+        users, err = safe_call(iam.list_users)
+        names = [u["UserName"] for u in users["Users"]] if not err else []
+        return [make_result("1.2", "IAM 사용자 계정 단일화 관리", "SKIP",
+                             "계정-담당자 매핑표(config.IAM_ACCOUNT_OWNER_MAP) 미확정 — "
+                             f"전체 IAM 사용자(참고용): {', '.join(names) if names else '없음'}")]
+    owner_counts = {}
+    for owner in config.IAM_ACCOUNT_OWNER_MAP.values():
+        owner_counts[owner] = owner_counts.get(owner, 0) + 1
+    dup_owners = {owner: cnt for owner, cnt in owner_counts.items() if cnt > 1}
+    status = "PASS" if not dup_owners else "FAIL"
+    detail = "1인 다중 계정 보유자: " + (str(dup_owners) if dup_owners else "없음")
+    return [make_result("1.2", "IAM 사용자 계정 단일화 관리", status, detail)]
 
 
 def check_1_3_user_identity_tags(iam):
@@ -58,22 +114,40 @@ def check_1_6_keypair_storage():
     return [make_result("1.6", "Key Pair 보관 관리", "SKIP", config.KEY_PAIR_STORAGE_CHECK_NOTE)]
 
 
-def check_1_8_access_key_lifecycle(iam):
-    users, err = safe_call(iam.list_users)
+def check_1_7_admin_console_policy(iam):
+    for _ in range(5):
+        gen, gerr = safe_call(iam.generate_credential_report)
+        if not gerr and gen.get("State") == "COMPLETE":
+            break
+        time.sleep(1)
+    report, rerr = safe_call(iam.get_credential_report)
+    if rerr:
+        return [make_result("1.7", "Admin Console 관리자 정책 관리", "SKIP", f"Credential Report 조회 실패: {rerr}")]
+    reader = csv.DictReader(io.StringIO(report["Content"].decode("utf-8")))
+    root_row = next((row for row in reader if row["user"] == "<root_account>"), None)
+    if not root_row:
+        return [make_result("1.7", "Admin Console 관리자 정책 관리", "SKIP", "Credential Report에 root 계정 행 없음")]
+    key_active = root_row.get("access_key_1_active") == "true" or root_row.get("access_key_2_active") == "true"
+    status = "FAIL" if key_active else "PASS"
+    detail = f"root Access Key 존재={key_active}, password_last_used={root_row.get('password_last_used')}"
+    return [make_result("1.7", "Admin Console 관리자 정책 관리", status, detail)]
+
+
+def check_1_8_access_key_lifecycle(configservice):
+    result, err = safe_call(
+        configservice.describe_compliance_by_config_rule,
+        ConfigRuleNames=[config.ACCESS_KEY_ROTATION_CONFIG_RULE],
+    )
     if err:
         return [make_result("1.8", "Admin Console 계정 Access Key 활성화 및 사용주기 관리", "SKIP",
-                             f"IAM 사용자 목록 조회 실패: {err}")]
-    violations = []
-    for u in users["Users"]:
-        keys, kerr = safe_call(iam.list_access_keys, UserName=u["UserName"])
-        if kerr:
-            continue
-        for k in keys["AccessKeyMetadata"]:
-            if k["Status"] == "Active" and age_in_days(k["CreateDate"]) > config.ACCESS_KEY_MAX_AGE_DAYS:
-                violations.append(f"{u['UserName']}({age_in_days(k['CreateDate'])}일)")
-    status = "PASS" if not violations else "FAIL"
-    detail = (f"기준({config.ACCESS_KEY_MAX_AGE_DAYS}일) 초과 Access Key: " +
-              (", ".join(violations) if violations else "없음"))
+                             f"AWS Config Rule({config.ACCESS_KEY_ROTATION_CONFIG_RULE}) 조회 실패: {err}")]
+    rules = result.get("ComplianceByConfigRules", [])
+    if not rules:
+        return [make_result("1.8", "Admin Console 계정 Access Key 활성화 및 사용주기 관리", "SKIP",
+                             f"Config Rule({config.ACCESS_KEY_ROTATION_CONFIG_RULE}) 미존재 — 배포 여부 확인 필요")]
+    compliance_type = rules[0]["Compliance"]["ComplianceType"]
+    status = "PASS" if compliance_type == "COMPLIANT" else "FAIL"
+    detail = f"Config Rule({config.ACCESS_KEY_ROTATION_CONFIG_RULE}) 컴플라이언스: {compliance_type}"
     return [make_result("1.8", "Admin Console 계정 Access Key 활성화 및 사용주기 관리", status, detail)]
 
 
@@ -131,13 +205,16 @@ def check_2_x_service_policies():
     ]
 
 
-def run_all(iam, ec2):
+def run_all(iam, ec2, configservice):
     results = []
+    results += check_1_1_user_account_management(iam)
+    results += check_1_2_iam_single_account(iam)
     results += check_1_3_user_identity_tags(iam)
     results += check_1_4_group_membership(iam)
     results += check_1_5_keypair_access(ec2)
     results += check_1_6_keypair_storage()
-    results += check_1_8_access_key_lifecycle(iam)
+    results += check_1_7_admin_console_policy(iam)
+    results += check_1_8_access_key_lifecycle(configservice)
     results += check_1_9_mfa(iam)
     results += check_1_10_password_policy(iam)
     results += check_1_11_eks_user_management()

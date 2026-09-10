@@ -10,9 +10,10 @@
 | `roles/account_auth` | U-01~13, U-63 (+U-08 SKIP) | 계정·인증 |
 | `roles/file_permission` | U-14~30 계열(U-23,26 포함) | 파일·디렉터리 권한 |
 | `roles/network_service` | U-34~61 계열(U-37,42 포함) | 서비스 활성화 여부 |
-| `roles/dbms_common` | D-01~26 중 코드화 대상 17개 | mysql.yml/postgresql.yml(SQL) + k8s_pod_checks.yml(D-07,14 파드레벨) |
+| `roles/log_patch_check` | U-64(패치), U-66(로깅) | mgmt 서버 AWS CLI 조회(SSM/CloudWatch) — 2026-09-10 재분류(제외→자동판정가능(부분)) |
+| `roles/dbms_common` | D-01~26 중 코드화 대상 18개 | mysql.yml/postgresql.yml(SQL) + k8s_pod_checks.yml(D-07,10,14 파드/K8s) + log_patch_check 재사용(D-26) |
 
-판정유형이 "제외"로 확정된 항목(U-62,64,66 / D-12,13,15,16,19,22,23,24,26)은 role에
+판정유형이 "제외"로 확정된 항목(U-62 / D-12,13,15,16,19,22,23,24)은 role에
 코드로 작성하지 않고, `scripts/build_server_dbms_xlsx.py`가 N/A 고정 행으로 삽입한다.
 
 ## 기준값 관리
@@ -63,6 +64,8 @@ DBMS 결과 항목에는 `target`(서비스명) 필드가 추가로 포함된다
 
 | 항목 | 이유 |
 |---|---|
-| U-08,23,26,28,31,33,40,45,47,49,50,51,56,61,65 / D-02,03,04,05,06,10,17,20 | 기준값 TODO — `group_vars/all.yml`에 표시. 값 확정 시 해당 파일만 수정 |
-| D-07, D-14 | `dbms_connections`에 host/namespace/pod_label_selector 확정 필요(DB 구축 진행 중) |
+| U-08,23,26,28,31,33,40,45,47,49,50,51,56,61,65 / D-02,03,04,05,06,17,20 | 기준값 TODO — `group_vars/all.yml`에 표시. 값 확정 시 해당 파일만 수정 |
+| U-64 | `u64_ssm_patch_manager_confirmed` TODO(확인요청 표 18번) — SSM Patch Manager 사용 확정 전까지 SKIP |
+| U-66, D-26 | `u66_log_group_name` / `d26_audit_log_group_name` TODO(확인요청 표 17번) — 로그그룹명 확정 전까지 SKIP |
+| D-07, D-10, D-14 | `dbms_connections`에 host/namespace/pod_label_selector 확정 필요(DB 구축 진행 중) |
 | 로컬 VM 파일럿 테스트 | 스펙 6절 참고 — 사용자 환경에서 진행 |
