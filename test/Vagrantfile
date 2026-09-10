@@ -1,0 +1,72 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+#
+# 인프라점검 스크립트 로컬 검증용 VM 3대 (spec 6절 기준)
+#   control  : Ansible 컨트롤 노드(=mgmt 서버 재현) — Ansible/boto3 설치, VM2/VM3로 SSH,
+#              kind(Docker 안 K8s) 클러스터까지 실행 — D-10 NetworkPolicy 검증 전용(spec 6.6절)
+#   server   : 서버 role(U-XX) 점검 대상 — 의도적 FAIL(U-01, U-07) 포함
+#   dbms     : DBMS role(D-XX) 점검 대상 — MySQL+PostgreSQL 같이 설치, 의도적 FAIL(D-01, D-18) 포함
+#
+# OS: Amazon Linux 2023 (spec 6.3절 — VirtualBox 공식 미지원이라 bento/amazonlinux-2023 사용)
+# 커넥션: 로컬 테스트는 SSH (spec 6.2절 — 운영은 SSM, 로직 검증 목적이라 SSH로 대체 가능)
+
+BOX = "bento/amazonlinux-2023"
+
+NODES = {
+  # control은 Ansible/boto3 외에 kind(Docker 안 K8s) 클러스터까지 띄우므로(spec 6.6절, D-10
+  # NetworkPolicy 검증용) 다른 노드보다 넉넉하게 배정.
+  "control" => { ip: "192.168.56.10", mem: 2560, cpus: 2 },
+  "server"  => { ip: "192.168.56.11", mem: 1024, cpus: 1 },
+  "dbms"    => { ip: "192.168.56.12", mem: 2048, cpus: 2 },
+}
+
+Vagrant.configure("2") do |config|
+  # vagrant-vbguest 0.32.0 이 최근 Vagrant 내장 Ruby에서 File.exists? 미지원으로 크래시함
+  # (Guest Additions 자동 설치는 이 테스트 목적에 불필요 — SSH 커넥션만 되면 충분) 전부 비활성화.
+  if Vagrant.has_plugin?("vagrant-vbguest")
+    config.vbguest.auto_update = false
+  end
+
+  NODES.each do |name, spec|
+    config.vm.define name do |node|
+      node.vm.box = BOX
+      node.vm.hostname = "infracheck-#{name}"
+      node.vm.network "private_network", ip: spec[:ip]
+
+      node.vm.provider "virtualbox" do |vb|
+        vb.name = "infracheck-#{name}"
+        vb.memory = spec[:mem]
+        vb.cpus = spec[:cpus]
+      end
+
+      # script/ (ansible/, cloud/ 등 어제 작성한 코드 전체)를 VM 안에 그대로 마운트.
+      # test/ 안 코드를 손대지 않고도 control 노드에서 실제 점검 코드를 그대로 실행하기 위함.
+      if name == "control"
+        node.vm.synced_folder "..", "/infra-check"
+      end
+
+      # 공유 SSH 키(이 리포지토리 test/.ssh 하위, provision/gen-ssh-key 로 생성)를
+      # 각 VM의 vagrant 계정 authorized_keys에 추가 — control이 server/dbms로 키 기반 SSH 가능하게 함.
+      node.vm.provision "file",
+        source: ".ssh/id_ed25519_infracheck.pub",
+        destination: "/tmp/infracheck.pub"
+      node.vm.provision "shell", inline: <<-SHELL
+        cat /tmp/infracheck.pub >> /home/vagrant/.ssh/authorized_keys
+        sort -u /home/vagrant/.ssh/authorized_keys -o /home/vagrant/.ssh/authorized_keys
+      SHELL
+
+      case name
+      when "control"
+        node.vm.provision "file",
+          source: ".ssh/id_ed25519_infracheck",
+          destination: "/home/vagrant/.ssh/id_ed25519_infracheck"
+        node.vm.provision "shell", path: "provision/control.sh"
+        node.vm.provision "shell", path: "provision/kind_setup.sh"
+      when "server"
+        node.vm.provision "shell", path: "provision/server_target.sh"
+      when "dbms"
+        node.vm.provision "shell", path: "provision/dbms_target.sh"
+      end
+    end
+  end
+end

@@ -22,3 +22,23 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# --- Python ---
+__pycache__/
+*.pyc
+
+# --- Ansible 점검 실행 결과(생성물, 소스 아님) ---
+ansible/results/*
+!ansible/results/.gitkeep
+
+# --- 로컬 테스트 환경(test/) — Vagrant/Terraform/SSH 비밀·캐시 ---
+test/.vagrant/
+test/.ssh/
+test/terraform/.terraform/
+test/terraform/*.tfstate
+test/terraform/*.tfstate.*
+test/terraform/*.tfplan
+test/terraform/tfplan.out
+
+# --- 로컬 도구 메타데이터 ---
+.claude/

@@ -1,0 +1,21 @@
+# D-10 의도적 케이스 구성 (spec 6.3.2절 원칙과 동일, 6.6절)
+#   케이스 1(PASS): mock-db-pass 는 role=db-client 라벨을 가진 파드에서만 ingress 허용
+#     -> ansible/group_vars/test_values.yml 의 d10_allowed_np_label(role=db-client)과 일치
+#   케이스 2(FAIL): mock-db-fail 은 NetworkPolicy 자체를 의도적으로 만들지 않음
+#     -> "NetworkPolicy 미존재 = 제한 없이 전체 허용"(spec 6.6절 괄호 표현) 그대로 재현
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-db-client-only
+  namespace: infracheck-test
+spec:
+  podSelector:
+    matchLabels:
+      app: mock-db-pass
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              role: db-client

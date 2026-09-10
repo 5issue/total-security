@@ -1,0 +1,27 @@
+# D-10(NetworkPolicy) 로컬 검증용 더미 DB 파드 2개 — 실제 DB 아님, 라벨/NetworkPolicy 매칭
+# 로직만 확인하면 되므로 아무 이미지나 떠 있기만 하면 됨(spec 6.6절).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mock-db-pass
+  namespace: infracheck-test
+  labels:
+    app: mock-db-pass
+spec:
+  containers:
+    - name: mock-db
+      image: busybox:1.36
+      command: ["sleep", "infinity"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mock-db-fail
+  namespace: infracheck-test
+  labels:
+    app: mock-db-fail
+spec:
+  containers:
+    - name: mock-db
+      image: busybox:1.36
+      command: ["sleep", "infinity"]
