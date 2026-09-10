@@ -1,0 +1,57 @@
+---
+# =============================================================================
+# ⚠ 테스트 전용 — 실제 값 아님, all.yml에 반영 금지 (spec 6.4절)
+#   로컬 VM 테스트 시에만 `-e @group_vars/test_values.yml` 로 얹어서 사용.
+#   all.yml 의 TODO(null) 값을 임의값으로 채워 SKIP 게이트가 풀렸을 때의
+#   PASS/FAIL 판정 로직이 정상 동작하는지 확인하기 위한 용도.
+# =============================================================================
+
+u08_root_group_admin_whitelist: ["ec2-user"]
+u28_allowed_ips: ["10.0.0.0/16"]
+u31_allowed_hidden_entries: [".ssh", ".cache"]
+u33_allowed_extra_paths: ["/opt/app"]
+u40_nfs_allowed_hosts: ["10.0.0.0/16"]
+u45_mail_latest_version: "3.14"
+u47_relay_allowed_list: ["10.0.0.0/16"]
+u49_dns_patch_baseline: "9.18"
+u50_dns_allowed_secondaries: ["10.0.1.10"]
+u51_dns_dynamic_update_allowed: []
+u56_ftp_allowed_hosts: ["10.0.0.0/16"]
+u61_snmp_allowed_hosts: ["10.0.0.0/16"]
+u65_ntp_allowed_servers: ["169.254.169.123"]
+u26_dev_baseline_snapshot: []   # 파일럿 VM에서 `ls /dev` 실행 후 채우는 것을 권장(테스트 시엔 빈 값 유지 가능)
+
+d02_unnecessary_account_whitelist: []
+d03_password_max_days: 90
+d03_password_min_length: 10
+d04_admin_account_whitelist: ["root", "postgres"]
+d05_applicable: true
+d05_password_reuse_limit: 5
+d06_shared_account_name_patterns: ["test", "temp", "guest", "common"]
+d10_allowed_client_hosts: ["10.0.%"]
+d20_admin_owner_whitelist: ["postgres"]
+
+# -----------------------------------------------------------------------------
+# 로컬 Vagrant 테스트(VM3=dbms) 접속 정보 — test/Vagrantfile, test/provision/dbms_target.sh 참고
+#   비밀번호는 해당 provision 스크립트의 TEST_DB_PASS 와 반드시 일치해야 함(테스트 VM 전용, 실제 값 아님)
+# -----------------------------------------------------------------------------
+mysql_login_user: root
+mysql_login_password: "InfraCheckTest!2026"
+pg_login_user: postgres
+pg_login_password: "InfraCheckTest!2026"
+
+dbms_connections:
+  - service: vm3-mysql
+    engine: mysql
+    host: "192.168.56.12"
+    port: 3306
+    secret_ref: null          # VM 테스트는 K8s Secret 미사용 — mysql_login_user/password 위 값 그대로 적용
+    namespace: null           # D-07/14 파드레벨 점검은 K8s 클러스터가 없는 VM 테스트라 자동 SKIP됨
+    pod_label_selector: null
+  - service: vm3-postgresql
+    engine: postgresql
+    host: "192.168.56.12"
+    port: 5432
+    secret_ref: null
+    namespace: null
+    pod_label_selector: null

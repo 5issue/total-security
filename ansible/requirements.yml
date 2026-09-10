@@ -1,0 +1,7 @@
+---
+# ansible-galaxy collection install -r requirements.yml 로 설치
+collections:
+  - name: community.mysql
+  - name: community.postgresql
+  - name: kubernetes.core
+  - name: amazon.aws   # aws_ssm 커넥션 플러그인 포함 — 정확한 컬렉션/버전은 실행 환경에서 재확인 필요
