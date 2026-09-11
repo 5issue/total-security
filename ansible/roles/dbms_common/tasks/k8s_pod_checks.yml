@@ -102,6 +102,7 @@
              ' / 0440 초과 완화 설정 볼륨: ' ~ ((d14_loose_secret + d14_loose_configmap) | map(attribute='name') | join(', ') if (d14_loose_secret | length > 0 or d14_loose_configmap | length > 0) else '없음')
       )
     }] }}"
+  when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0)
 
 # -----------------------------------------------------------------------------
 # D-10 | 원격 DB 서버 접속 제한 — 2026-09-09 인프라팀 확인으로 IP 허용목록이 아니라

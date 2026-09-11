@@ -100,7 +100,10 @@
     login_port: "{{ db_conn.port }}"
     login_user: "{{ mysql_login_user }}"
     login_password: "{{ mysql_login_password }}"
-    query: "SELECT grantee FROM information_schema.user_privileges WHERE privilege_type IN ('SUPER','SYSTEM_USER') AND grantee NOT LIKE \"'root'@%\""
+    query: >-
+      SELECT grantee FROM information_schema.user_privileges
+      WHERE privilege_type IN ('SUPER','SYSTEM_USER') AND grantee NOT LIKE "'root'@%"
+      AND grantee NOT IN ("'mysql.sys'@'localhost'", "'mysql.session'@'localhost'", "'mysql.infoschema'@'localhost'")
   register: d04_raw
   failed_when: false
 
@@ -227,7 +230,13 @@
     login_port: "{{ db_conn.port }}"
     login_user: "{{ mysql_login_user }}"
     login_password: "{{ mysql_login_password }}"
-    query: "SELECT user, host, failed_login_attempts, password_lock_time FROM mysql.user WHERE failed_login_attempts = 0"
+    # MySQL 8.0.19+ 계정 잠금 설정은 mysql.user에 failed_login_attempts라는 별도 컬럼이 없고,
+    # User_attributes(JSON) 안에 {"Password_locking": {"failed_login_attempts": N, ...}}로 저장된다.
+    query: >-
+      SELECT user, host FROM mysql.user
+      WHERE user NOT IN ('mysql.sys','mysql.session','mysql.infoschema')
+      AND (JSON_EXTRACT(User_attributes, '$.Password_locking.failed_login_attempts') IS NULL
+           OR JSON_EXTRACT(User_attributes, '$.Password_locking.failed_login_attempts') = 0)
   register: d09_raw
   failed_when: false
   when: >

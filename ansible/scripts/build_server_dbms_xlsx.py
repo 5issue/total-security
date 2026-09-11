@@ -71,10 +71,19 @@ def load_result_files(results_dir: Path):
 
 
 def build_server_rows(server_files, round_filter):
+    # results 디렉터리에 여러 회차 실행분(crontab 정기점검 등)의 JSON이 계속 쌓이므로,
+    # 같은 회차 안에서는 호스트별로 checked_at이 가장 최신인 파일 하나만 사용한다
+    # (아니면 같은 항목이 실행 횟수만큼 중복 집계됨).
+    filtered = [(p, d) for p, d in server_files if not round_filter or d.get("round") == round_filter]
+    latest_by_host = {}
+    for path, data in filtered:
+        host = data.get("host", "?")
+        existing = latest_by_host.get(host)
+        if existing is None or data.get("checked_at", "") > existing[1].get("checked_at", ""):
+            latest_by_host[host] = (path, data)
+
     rows = []
-    for path, data in server_files:
-        if round_filter and data.get("round") != round_filter:
-            continue
+    for path, data in latest_by_host.values():
         for r in data.get("results", []):
             rows.append([
                 r["id"], r["item"], r["status"], r.get("detail", ""),
@@ -84,21 +93,38 @@ def build_server_rows(server_files, round_filter):
 
 
 def build_dbms_rows(dbms_files, round_filter):
+    # DBMS 결과는 호스트 구분이 없는 파일 하나(실행마다 전체 dbms_connections를 담음)이므로,
+    # 같은 회차 안에서는 checked_at이 가장 최신인 파일 하나만 사용한다.
+    filtered = [(p, d) for p, d in dbms_files if not round_filter or d.get("round") == round_filter]
+    if not filtered:
+        return []
+    path, data = max(filtered, key=lambda pd: pd[1].get("checked_at", ""))
+
     rows = []
-    for path, data in dbms_files:
-        if round_filter and data.get("round") != round_filter:
-            continue
-        for r in data.get("results", []):
-            rows.append([
-                r["id"], r["item"], r["status"], r.get("detail", ""),
-                r.get("target", "해당없음"), data.get("checked_at", ""), data.get("round", ""),
-            ])
+    for r in data.get("results", []):
+        rows.append([
+            r["id"], r["item"], r["status"], r.get("detail", ""),
+            r.get("target", "해당없음"), data.get("checked_at", ""), data.get("round", ""),
+        ])
     return rows
 
 
 def append_excluded_rows(rows, items, round_label, checked_at):
     for item_id, item_name in items:
         rows.append([item_id, item_name, "N/A", EXCLUDED_DETAIL, "전체(정책항목, 코드 미실행)", checked_at, round_label])
+
+
+def _item_id_sort_key(item_id):
+    # "U-07" -> 7, "D-25" -> 25 (분류표 번호순 정렬용, 문자열 정렬 시 U-1 뒤에 U-10이 오는 문제 방지)
+    try:
+        return int(item_id.split("-")[1])
+    except (IndexError, ValueError):
+        return 0
+
+
+def sort_rows(rows):
+    # 대상(호스트/서비스)별로 묶은 다음, 그 안에서 항목ID 번호순으로 정렬한다.
+    rows.sort(key=lambda r: (r[4], _item_id_sort_key(r[0])))
 
 
 def write_sheet(wb, title, rows):
@@ -122,6 +148,8 @@ def main():
     dbms_rows = build_dbms_rows(dbms_files, args.round_)
     append_excluded_rows(server_rows, EXCLUDED_SERVER_ITEMS, round_label, now_iso)
     append_excluded_rows(dbms_rows, EXCLUDED_DBMS_ITEMS, round_label, now_iso)
+    sort_rows(server_rows)
+    sort_rows(dbms_rows)
 
     wb = Workbook()
     wb.remove(wb.active)

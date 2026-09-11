@@ -23,7 +23,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-14', 'item': 'PATH 환경변수 관리',
       'status': 'FAIL' if u14_has_dot else 'PASS',
-      'detail': u14_raw.stdout | default('PATH 설정 조회 실패(기본값 사용 중으로 간주, 참고 필요)') | truncate(200)
+      'detail': u14_raw.stdout | default('PATH 설정 조회 실패(기본값 사용 중으로 간주, 참고 필요)', true) | truncate(200)
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -42,7 +42,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-15', 'item': '불필요한 파일 및 디렉터리 제거(무소유자 파일)',
       'status': 'PASS' if (u15_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '무소유자/무그룹 파일(최대 20건 표시): ' ~ (u15_raw.stdout | default('없음'))
+      'detail': '무소유자/무그룹 파일(최대 20건 표시): ' ~ (u15_raw.stdout | default('없음', true))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -216,7 +216,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-24', 'item': '사용자 환경 파일 보호',
       'status': 'PASS' if (u24_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '그룹/전체 쓰기권한 있는 환경파일: ' ~ (u24_raw.stdout | default('없음'))
+      'detail': '그룹/전체 쓰기권한 있는 환경파일: ' ~ (u24_raw.stdout | default('없음', true))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -239,7 +239,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-25', 'item': 'world writable 파일 점검',
       'status': 'PASS' if (u25_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': 'world writable 파일(최대 20건, 표준 제외경로 밖): ' ~ (u25_raw.stdout | default('없음'))
+      'detail': 'world writable 파일(최대 20건, 표준 제외경로 밖): ' ~ (u25_raw.stdout | default('없음', true))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -333,7 +333,7 @@
       ),
       'detail': (
         'firewalld: ' ~ u28_firewalld_active.stdout | trim ~
-        (' / source 제한: ' ~ (u28_sources_raw.stdout | default('없음') | trim) if 'active' in u28_firewalld_active.stdout else '') ~
+        (' / source 제한: ' ~ (u28_sources_raw.stdout | default('없음', true) | trim) if 'active' in u28_firewalld_active.stdout else '') ~
         (' — 허용IP목록(u28_allowed_ips) TODO' if u28_allowed_ips is none else '')
       )
     }] }}"
@@ -374,7 +374,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-30', 'item': 'UMASK 설정',
       'status': 'PASS' if ((u30_value | int(base=8)) >= (u30_umask_min | int(base=8))) else 'FAIL',
-      'detail': u30_raw.stdout | default('UMASK 명시 설정 없음(시스템 기본값 022로 간주)')
+      'detail': u30_raw.stdout | default('UMASK 명시 설정 없음(시스템 기본값 022로 간주)', true)
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -465,5 +465,5 @@
     check_results: "{{ check_results + [{
       'id': 'U-67', 'item': '로그 디렉터리 소유자 및 권한 설정',
       'status': 'PASS' if (u67_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '소유자(root 아님) 또는 권한(' ~ u67_log_perm_max ~ ' 초과) 위반 로그파일(최대 20건): ' ~ (u67_raw.stdout | default('없음'))
+      'detail': '소유자(root 아님) 또는 권한(' ~ u67_log_perm_max ~ ' 초과) 위반 로그파일(최대 20건): ' ~ (u67_raw.stdout | default('없음', true))
     }] }}"

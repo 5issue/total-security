@@ -205,10 +205,12 @@
     login_user: "{{ pg_login_user }}"
     login_password: "{{ pg_login_password }}"
     db: postgres
-    query: >
+    query: >-
       SELECT grantee, table_name FROM information_schema.table_privileges
       WHERE table_schema='pg_catalog' AND grantee='PUBLIC' AND privilege_type != 'SELECT'
+      AND NOT (table_name='pg_settings' AND privilege_type='UPDATE')
     # pg_catalog는 모든 DB에 동일하게 존재하는 시스템 스키마라 db: postgres 고정 조회로 충분(의도적)
+    # pg_settings에 대한 PUBLIC UPDATE는 PostgreSQL 기본 동작(SET과 동등한 세션 설정 변경 허용)이라 예외처리
   register: d11_raw
   failed_when: false
 

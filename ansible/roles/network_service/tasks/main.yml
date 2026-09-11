@@ -100,7 +100,7 @@
       'id': 'U-37', 'item': 'crontab 설정파일 권한 설정',
       'status': 'PASS' if u37_perm_ok else 'FAIL',
       'detail': ('/etc/crontab 없음' if not u37_stat.stat.exists else ('mode=' ~ u37_stat.stat.mode ~ ' (기준 <= ' ~ u37_crontab_perm_max ~ ')')) ~
-                ' / cron.allow: ' ~ (u37_allow_raw.stdout | default('없음(기본 전체허용 가능성, 참고 필요)') | trim)
+                ' / cron.allow: ' ~ (u37_allow_raw.stdout | default('없음(기본 전체허용 가능성, 참고 필요)', true) | trim)
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -287,7 +287,7 @@
       ),
       'detail': (
         '메일 서비스 미사용(해당없음)' if (u45_active_raw.stdout | default('0') | trim) == '0'
-        else ('현재 버전: ' ~ (u45_version_raw.stdout | default('조회 실패')) ~
+        else ('현재 버전: ' ~ (u45_version_raw.stdout | default('조회 실패', true)) ~
               (' — 최신버전 기준(u45_mail_latest_version) TODO' if u45_mail_latest_version is none else ''))
       )
     }] }}"
@@ -327,7 +327,7 @@
       ),
       'detail': (
         '메일 서비스 미사용(해당없음)' if (u45_active_raw.stdout | default('0') | trim) == '0'
-        else ('mynetworks: ' ~ (u47_raw.stdout | default('조회 실패')) ~
+        else ('mynetworks: ' ~ (u47_raw.stdout | default('조회 실패', true)) ~
               (' — 릴레이 허용목록(u47_relay_allowed_list) TODO' if u47_relay_allowed_list is none else ''))
       )
     }] }}"
@@ -352,7 +352,7 @@
       ),
       'detail': (
         '메일 서비스 미사용(해당없음, 자동 양호)' if (u45_active_raw.stdout | default('0') | trim) == '0'
-        else 'disable_vrfy_command: ' ~ (u48_raw.stdout | default('조회 실패'))
+        else 'disable_vrfy_command: ' ~ (u48_raw.stdout | default('조회 실패', true))
       )
     }] }}"
 
@@ -385,7 +385,7 @@
       ),
       'detail': (
         'DNS(named) 미사용(해당없음)' if (u49_active_raw.stdout | default('0') | trim) == '0'
-        else ('현재 버전: ' ~ (u49_version_raw.stdout | default('조회 실패')) ~
+        else ('현재 버전: ' ~ (u49_version_raw.stdout | default('조회 실패', true)) ~
               (' — 최신 패치 기준(u49_dns_patch_baseline) TODO' if u49_dns_patch_baseline is none else ''))
       )
     }] }}"
@@ -498,7 +498,7 @@
       ),
       'detail': (
         'FTP(vsftpd) 미사용(해당없음)' if (u53_active_raw.stdout | default('0') | trim) == '0'
-        else ('ftpd_banner 설정: ' ~ (u53_raw.stdout | default('미설정(기본 배너 노출, 취약)')))
+        else ('ftpd_banner 설정: ' ~ (u53_raw.stdout | default('미설정(기본 배너 노출, 취약)', true)))
       )
     }] }}"
 
@@ -524,7 +524,7 @@
       ),
       'detail': (
         'FTP(vsftpd) 미사용(해당없음)' if (u53_active_raw.stdout | default('0') | trim) == '0'
-        else 'ssl_enable 설정: ' ~ (u54_raw.stdout | default('미설정(평문 FTP, 취약)'))
+        else 'ssl_enable 설정: ' ~ (u54_raw.stdout | default('미설정(평문 FTP, 취약)', true))
       )
     }] }}"
 
@@ -571,7 +571,7 @@
       ),
       'detail': (
         'FTP(vsftpd) 미사용(해당없음)' if (u53_active_raw.stdout | default('0') | trim) == '0'
-        else ('hosts.allow/deny vsftpd 설정: ' ~ (u56_raw.stdout | default('없음')) ~
+        else ('hosts.allow/deny vsftpd 설정: ' ~ (u56_raw.stdout | default('없음', true)) ~
               (' — 허용IP목록(u56_ftp_allowed_hosts) TODO' if u56_ftp_allowed_hosts is none else ''))
       )
     }] }}"
@@ -598,7 +598,7 @@
       ),
       'detail': (
         'FTP(vsftpd) 미사용(해당없음)' if (u53_active_raw.stdout | default('0') | trim) == '0'
-        else 'ftpusers 내용: ' ~ (u57_raw.stdout | default('파일 없음(취약)') | truncate(150))
+        else 'ftpusers 내용: ' ~ (u57_raw.stdout | default('파일 없음(취약)', true) | truncate(150))
       )
     }] }}"
 
