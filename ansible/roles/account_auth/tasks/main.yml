@@ -20,7 +20,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-01', 'item': 'root 계정 원격 접속 차단',
       'status': 'PASS' if (u01_raw.stdout is defined and 'no' in u01_raw.stdout | lower) else 'FAIL',
-      'detail': u01_raw.stdout | default('PermitRootLogin 설정 없음(기본값 확인 필요)')
+      'detail': u01_raw.stdout | default('PermitRootLogin 설정 없음(기본값 확인 필요)', true)
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -44,7 +44,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-02', 'item': '패스워드 최소 길이·복잡도',
       'status': 'PASS' if u02_ok else 'FAIL',
-      'detail': u02_raw.stdout | default('pwquality.conf 조회 실패') | truncate(200)
+      'detail': u02_raw.stdout | default('pwquality.conf 조회 실패', true) | truncate(200)
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -67,7 +67,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-03', 'item': '계정 잠금 임계값 설정',
       'status': 'PASS' if (u03_faillock_conf.stat.exists and u03_pam_ref.stdout | default('') | length > 0) else 'FAIL',
-      'detail': ('faillock.conf 존재: ' ~ (u03_faillock_conf.stat.exists | string) ~ ' / pam 참조: ' ~ (u03_pam_ref.stdout | default('없음')))
+      'detail': ('faillock.conf 존재: ' ~ (u03_faillock_conf.stat.exists | string) ~ ' / pam 참조: ' ~ (u03_pam_ref.stdout | default('없음', true)))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -121,7 +121,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-06', 'item': 'su 명령어 사용 제한',
       'status': 'PASS' if (u06_raw.rc == 0) else 'FAIL',
-      'detail': u06_raw.stdout | default('pam_wheel 설정 없음')
+      'detail': u06_raw.stdout | default('pam_wheel 설정 없음', true)
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -212,7 +212,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-09', 'item': '그룹 ID 중복 금지',
       'status': 'PASS' if (u09_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '중복 GID: ' ~ (u09_raw.stdout | default('없음'))
+      'detail': '중복 GID: ' ~ (u09_raw.stdout | default('없음', true))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -231,7 +231,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-10', 'item': '사용자 UID 중복 금지',
       'status': 'PASS' if (u10_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '중복 UID: ' ~ (u10_raw.stdout | default('없음'))
+      'detail': '중복 UID: ' ~ (u10_raw.stdout | default('없음', true))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -247,7 +247,7 @@
 
 - name: "U-11 | 로그인 shell 가진 시스템 계정 조회"
   vars:
-    u11_uidmin: "{{ u11_uidmin_raw.stdout | default('1000') | trim | int }}"
+    u11_uidmin: "{{ u11_uidmin_raw.stdout | default('1000', true) | trim | int }}"
   ansible.builtin.shell: >
     set -o pipefail &&
     awk -F: -v m="{{ u11_uidmin }}" '($3>0 && $3<m && $1!="root" && $7 ~ /(bash|sh)$/){print $1}' /etc/passwd
@@ -262,7 +262,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-11', 'item': '시스템 계정 로그인 Shell 제한',
       'status': 'PASS' if (u11_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '로그인 가능 시스템 계정: ' ~ (u11_raw.stdout | default('없음'))
+      'detail': '로그인 가능 시스템 계정: ' ~ (u11_raw.stdout | default('없음', true))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -283,7 +283,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-12', 'item': '비활성 세션 자동 종료(TMOUT)',
       'status': 'PASS' if (u12_raw.stdout | default('') | length > 0 and u12_value <= u12_tmout_max_seconds) else 'FAIL',
-      'detail': u12_raw.stdout | default('TMOUT 미설정')
+      'detail': u12_raw.stdout | default('TMOUT 미설정', true)
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -302,7 +302,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-13', 'item': '패스워드 안전 암호화 저장',
       'status': 'PASS' if (u13_required_encrypt_method in (u13_raw.stdout | default(''))) else 'FAIL',
-      'detail': u13_raw.stdout | default('ENCRYPT_METHOD 미설정(배포판 기본값 확인 필요)')
+      'detail': u13_raw.stdout | default('ENCRYPT_METHOD 미설정(배포판 기본값 확인 필요)', true)
     }] }}"
 
 # -----------------------------------------------------------------------------

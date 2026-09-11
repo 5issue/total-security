@@ -17,11 +17,35 @@ EXCLUDED_ANONYMOUS_BINDING = "system:public-info-viewer"
 SYSTEM_NAMESPACES = {"kube-system", "kube-public", "kube-node-lease"}
 
 
+def _resolve_context(cluster_name):
+    # `aws eks update-kubeconfig --name <cluster>`는 --alias 없이 쓰면 컨텍스트 이름을
+    # 클러스터 이름이 아니라 "arn:aws:eks:<region>:<account>:cluster/<cluster-name>" 전체
+    # ARN으로 만든다. 정확히 일치하는 컨텍스트가 없으면 클러스터 이름을 포함하는 컨텍스트를
+    # 대신 찾는다(ARN 마지막 세그먼트로 끝나는 것 우선).
+    try:
+        contexts, _ = k8s_config.list_kube_config_contexts()
+    except Exception as exc:  # noqa: BLE001
+        return None, f"kubeconfig 컨텍스트 목록 조회 실패: {exc}"
+    names = [c["name"] for c in contexts]
+    if cluster_name in names:
+        return cluster_name, None
+    matches = [n for n in names if n.endswith("/" + cluster_name)] or \
+              [n for n in names if cluster_name in n]
+    if len(matches) == 1:
+        return matches[0], None
+    if not matches:
+        return None, f"'{cluster_name}' 클러스터에 해당하는 kubeconfig 컨텍스트를 찾지 못함(보유 컨텍스트: {names})"
+    return None, f"'{cluster_name}'과 매칭되는 컨텍스트가 여러 개({matches}) — kubeconfig에 --alias로 명확히 구분 필요"
+
+
 def _load_core_v1(cluster_name):
     if k8s_config is None:
         return None, "kubernetes 패키지 미설치"
+    context, err = _resolve_context(cluster_name)
+    if err:
+        return None, err
     try:
-        k8s_config.load_kube_config(context=cluster_name)
+        k8s_config.load_kube_config(context=context)
         return k8s_client.CoreV1Api(), None
     except Exception as exc:  # noqa: BLE001
         return None, str(exc)
@@ -30,8 +54,11 @@ def _load_core_v1(cluster_name):
 def _load_rbac_v1(cluster_name):
     if k8s_config is None:
         return None, "kubernetes 패키지 미설치"
+    context, err = _resolve_context(cluster_name)
+    if err:
+        return None, err
     try:
-        k8s_config.load_kube_config(context=cluster_name)
+        k8s_config.load_kube_config(context=context)
         return k8s_client.RbacAuthorizationV1Api(), None
     except Exception as exc:  # noqa: BLE001
         return None, str(exc)
