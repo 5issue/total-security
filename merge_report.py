@@ -29,12 +29,24 @@ STATUSES = ["PASS", "FAIL", "N/A", "SKIP", "REVIEW"]
 def parse_args():
     script_dir = Path(__file__).resolve().parent
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--server-dbms", default=str(script_dir / "server_dbms_result.xlsx"))
-    p.add_argument("--cloud", default=str(script_dir / "cloud_result.xlsx"))
+    p.add_argument("--date", default=datetime.now().strftime("%Y%m%d"),
+                   help="날짜 폴더명(YYYYMMDD, 기본: 오늘) — script/results/{date}/ 아래에서 입출력")
+    p.add_argument("--server-dbms", default=None,
+                   help="입력 경로(기본: script/results/{date}/server_dbms_result.xlsx)")
+    p.add_argument("--cloud", default=None,
+                   help="입력 경로(기본: script/results/{date}/cloud_result.xlsx)")
     p.add_argument("--round", dest="round_", default="정기점검")
-    p.add_argument("--date", default=datetime.now().strftime("%Y%m%d"), help="파일명에 쓸 날짜(YYYYMMDD)")
-    p.add_argument("--output", default=None, help="출력 경로(기본: infra_check_{date}_{round}.xlsx)")
-    return p.parse_args()
+    p.add_argument("--output", default=None,
+                   help="출력 경로(기본: script/results/{date}/infra_check_{date}_{round}.xlsx)")
+    args = p.parse_args()
+    results_dir = script_dir / "results" / args.date
+    if args.server_dbms is None:
+        args.server_dbms = str(results_dir / "server_dbms_result.xlsx")
+    if args.cloud is None:
+        args.cloud = str(results_dir / "cloud_result.xlsx")
+    if args.output is None:
+        args.output = str(results_dir / f"infra_check_{args.date}_{args.round_}.xlsx")
+    return args
 
 
 def read_sheet_rows(path: Path, sheet_name: str):
@@ -122,8 +134,8 @@ def main():
     write_data_sheet(wb, "DBMS", dbms_rows)
     write_data_sheet(wb, "클라우드", cloud_rows)
 
-    out_path = Path(args.output) if args.output else \
-        Path(__file__).resolve().parent / f"infra_check_{args.date}_{args.round_}.xlsx"
+    out_path = Path(args.output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
     print(f"[완료] {out_path} 생성 — 총 {len(all_rows)}건 "
           f"(서버 {len(server_rows)} / DBMS {len(dbms_rows)} / 클라우드 {len(cloud_rows)})")

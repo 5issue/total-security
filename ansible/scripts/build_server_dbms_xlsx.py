@@ -42,12 +42,17 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--results-dir", default=str(script_dir.parent / "results"),
                     help="site_check.yml이 저장한 JSON 결과 디렉터리 (기본: ansible/results)")
-    p.add_argument("--output", default=str(script_dir.parent.parent / "server_dbms_result.xlsx"),
-                    help="출력 xlsx 경로 (기본: script/server_dbms_result.xlsx)")
+    p.add_argument("--date", default=datetime.now().strftime("%Y%m%d"),
+                    help="결과를 저장할 날짜 폴더명(YYYYMMDD, 기본: 오늘) — script/results/{date}/ 아래 저장")
+    p.add_argument("--output", default=None,
+                    help="출력 xlsx 경로 (기본: script/results/{date}/server_dbms_result.xlsx)")
     p.add_argument("--round", dest="round_", default=None,
                     help="회차(예: 1차/2차/정기점검). 지정 시 이 회차의 JSON만 포함하고, "
                          "제외 확정 항목의 회차 표시에도 사용한다. 미지정 시 발견된 모든 JSON을 포함.")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.output is None:
+        args.output = str(script_dir.parent.parent / "results" / args.date / "server_dbms_result.xlsx")
+    return args
 
 
 def load_result_files(results_dir: Path):
