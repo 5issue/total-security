@@ -119,14 +119,30 @@
   failed_when: false
   when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0)
 
-- name: "{{ db_conn.service }} | D-10 판정 기록"
+# Jinja2는 파이썬 리스트 컴프리헨션([x for x in y if ...])을 지원하지 않아 loop로 필터링한다.
+# podSelector.matchLabels(미설정 시 {} = 네임스페이스 전체 대상)가 파드 라벨의 부분집합이면 "적용됨"
+# (combine으로 병합했을 때 원래 파드 라벨과 그대로면 matchLabels의 모든 키·값이 이미 존재한다는 뜻)
+- name: "{{ db_conn.service }} | D-10 파드 라벨/조회된 NetworkPolicy 준비"
   vars:
     k8s_pod: "{{ k8s_pods_raw.resources[0] }}"
+  ansible.builtin.set_fact:
     d10_pod_labels: "{{ k8s_pod.metadata.labels | default({}) }}"
     d10_all_netpols: "{{ d10_netpols_raw.resources | default([]) }}"
-    # podSelector.matchLabels(미설정 시 {} = 네임스페이스 전체 대상)가 파드 라벨의 부분집합이면 "적용됨"
-    # (combine으로 병합했을 때 원래 파드 라벨과 그대로면 matchLabels의 모든 키·값이 이미 존재한다는 뜻)
-    d10_applying_np: "{{ [np for np in d10_all_netpols if (d10_pod_labels | combine(np.spec.podSelector.matchLabels | default({}))) == d10_pod_labels] }}"
+    d10_applying_np: []
+  when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0)
+
+- name: "{{ db_conn.service }} | D-10 대상 파드에 적용되는 NetworkPolicy 판별"
+  ansible.builtin.set_fact:
+    d10_applying_np: "{{ d10_applying_np + [item] }}"
+  loop: "{{ d10_all_netpols | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name | default('?') }}"
+  when: >-
+    k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0)
+    and (d10_pod_labels | combine(item.spec.podSelector.matchLabels | default({}))) == d10_pod_labels
+
+- name: "{{ db_conn.service }} | D-10 판정 기록"
+  vars:
     d10_np_with_restriction: "{{ d10_applying_np | selectattr('spec.podSelector.matchLabels', 'defined') | list }}"
     d10_allow_from_labels: "{{ d10_applying_np
                                 | map(attribute='spec.ingress') | select('defined') | list | sum(start=[])

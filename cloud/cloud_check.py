@@ -35,8 +35,10 @@ def parse_args():
     script_dir = Path(__file__).resolve().parent
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--round", dest="round_", default="정기점검", help="회차(예: 1차/2차/정기점검)")
-    p.add_argument("--output", default=str(script_dir.parent / "cloud_result.xlsx"),
-                   help="출력 xlsx 경로 (기본: script/cloud_result.xlsx)")
+    p.add_argument("--date", default=datetime.now().strftime("%Y%m%d"),
+                   help="결과를 저장할 날짜 폴더명(YYYYMMDD, 기본: 오늘) — script/results/{date}/ 아래 저장")
+    p.add_argument("--output", default=None,
+                   help="출력 xlsx 경로 (기본: script/results/{date}/cloud_result.xlsx)")
     p.add_argument("--region", default=None, help="boto3 리전 지정(미지정 시 기본 프로파일 리전 사용)")
     p.add_argument("--eks-clusters", default=None,
                    help="점검할 EKS 클러스터 이름(콤마구분). 미지정 시 config.EKS_CLUSTER_NAMES, "
@@ -44,7 +46,10 @@ def parse_args():
     p.add_argument("--test-config", action="store_true",
                    help="⚠ 테스트 전용 — config_test.py의 임의값으로 config.py의 TODO(None) 값을 "
                         "덮어쓰고 실행한다. 로컬 검증 시에만 사용, 운영 실행에는 절대 붙이지 말 것.")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.output is None:
+        args.output = str(script_dir.parent / "results" / args.date / "cloud_result.xlsx")
+    return args
 
 
 def apply_test_config():

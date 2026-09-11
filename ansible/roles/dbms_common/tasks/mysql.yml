@@ -257,9 +257,7 @@
     login_port: "{{ db_conn.port }}"
     login_user: "{{ mysql_login_user }}"
     login_password: "{{ mysql_login_password }}"
-    query: >
-      SELECT grantee, table_schema FROM information_schema.schema_privileges
-      WHERE table_schema='mysql' AND grantee NOT LIKE \"'root'@%\"
+    query: "SELECT grantee, table_schema FROM information_schema.schema_privileges WHERE table_schema='mysql' AND grantee NOT LIKE \"'root'@%\""
   register: d11_raw
   failed_when: false
 

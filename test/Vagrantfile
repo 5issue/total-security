@@ -15,7 +15,7 @@ BOX = "bento/amazonlinux-2023"
 NODES = {
   # control은 Ansible/boto3 외에 kind(Docker 안 K8s) 클러스터까지 띄우므로(spec 6.6절, D-10
   # NetworkPolicy 검증용) 다른 노드보다 넉넉하게 배정.
-  "control" => { ip: "192.168.56.10", mem: 2560, cpus: 2 },
+  "control" => { ip: "192.168.56.10", mem: 4096, cpus: 3 },
   "server"  => { ip: "192.168.56.11", mem: 1024, cpus: 1 },
   "dbms"    => { ip: "192.168.56.12", mem: 2048, cpus: 2 },
 }

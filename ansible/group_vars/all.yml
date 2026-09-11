@@ -316,3 +316,6 @@ dbms_connections: []
 #     secret_ref: null
 #     namespace: null
 #     pod_label_selector: null
+#     database: null              # 애플리케이션 DB명 — PostgreSQL은 D-11/18/20/21이 DB별로
+#                                  # 스코프된 카탈로그(information_schema/pg_tables)를 조회하므로
+#                                  # 관리용 postgres DB가 아니라 실제 앱 DB명을 지정해야 함

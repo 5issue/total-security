@@ -19,6 +19,7 @@
 
 - name: "U-64 | 대상 인스턴스 EC2 메타데이터 조회"
   amazon.aws.ec2_metadata_facts:
+  ignore_errors: true
   when: u64_ssm_patch_manager_confirmed | default(false) | bool
 
 - name: "U-64 | SSM 패치 상태 조회(mgmt 서버 AWS CLI)"
@@ -27,11 +28,11 @@
   register: u64_patch_raw
   delegate_to: localhost
   failed_when: false
-  when: u64_ssm_patch_manager_confirmed | default(false) | bool
+  when: u64_ssm_patch_manager_confirmed | default(false) | bool and ansible_ec2_instance_id is defined
 
 - name: "U-64 | 판정 기록"
   vars:
-    u64_ok: "{{ u64_patch_raw is defined and u64_patch_raw.rc == 0 }}"
+    u64_ok: "{{ u64_patch_raw is defined and (u64_patch_raw.rc | default(-1)) == 0 }}"
     u64_parsed: "{{ (u64_patch_raw.stdout | from_json) if u64_ok else {} }}"
     u64_states: "{{ u64_parsed.InstancePatchStates | default([]) }}"
     u64_state: "{{ u64_states[0] if u64_states | length > 0 else {} }}"
