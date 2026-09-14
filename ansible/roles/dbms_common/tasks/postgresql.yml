@@ -6,11 +6,22 @@
 #     target = db_conn.service (항목명 자체는 분류표 원문 그대로 유지)
 # =============================================================================
 
+- name: "{{ db_conn.service }} | 자격증명 기본값 설정"
+  # ⚠ K8s Secret lookup이 RBAC 미설정 등으로 실패하면 아래 조회 태스크가 ignore_errors로
+  # 넘어가더라도 pg_login_user/password가 undefined로 남아 이후 모든 태스크가 템플릿
+  # 오류로 중단된다(failed_when으로 못 막는 종류의 실패). 빈 문자열을 먼저 깔아둬서
+  # 조회 실패 시에도 DB 연결 자체만 자격증명 오류로 실패(failed_when: false로 처리됨)하고
+  # 나머지 커넥션·플레이는 계속 진행되게 한다.
+  ansible.builtin.set_fact:
+    pg_login_user: ""
+    pg_login_password: ""
+
 - name: "{{ db_conn.service }} | K8s Secret에서 자격증명 조회"
   ansible.builtin.set_fact:
     pg_login_user: "{{ lookup('kubernetes.core.k8s', kind='Secret', name=db_conn.secret_ref, namespace=db_conn.namespace | default('default')) | json_query('data.username') | b64decode }}"
     pg_login_password: "{{ lookup('kubernetes.core.k8s', kind='Secret', name=db_conn.secret_ref, namespace=db_conn.namespace | default('default')) | json_query('data.password') | b64decode }}"
   when: db_conn.secret_ref is not none
+  ignore_errors: true
 
 # -----------------------------------------------------------------------------
 # D-01 | 기본 계정(postgres) 잠금·유효기간 상태 [SKIP 고정 — 2026-09-13 결정]

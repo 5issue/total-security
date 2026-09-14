@@ -404,7 +404,7 @@
       'status': 'FAIL' if u31_unauthorized | length > 0 else 'N/A',
       'detail': (
         'OS/도구 표준 항목 외 숨김 디렉터리 발견: ' ~ (u31_unauthorized | join(', ')) if u31_unauthorized | length > 0
-        else '사용자 정의 숨김 디렉터리 없음(OS 기본 항목만 존재) — 컨테이너 기반 인프라 특성상 정상(N/A 확정, 2026-09-13 인프라팀 확인)'
+        else '사용자 정의 숨김 디렉터리 없음(OS 기본 항목만 존재) — 컨테이너 기반 인프라 특성상 정상(N/A)'
       )
     }] }}"
 
@@ -432,7 +432,7 @@
       'status': 'FAIL' if (u33_raw.stdout | default('') | length > 0) else 'N/A',
       'detail': (
         '업무 파일 배치 경로(' ~ (u33_business_file_dirs | join(', ')) ~ ')에서 파일 발견: ' ~ (u33_raw.stdout | truncate(200)) if (u33_raw.stdout | default('') | length > 0)
-        else '업무 파일 배치 경로 전부 비어있음 — 컨테이너 기반 인프라 특성상 정상(N/A 확정, 2026-09-13 인프라팀 확인)'
+        else '업무 파일 배치 경로 전부 비어있음 — 컨테이너 기반 인프라 특성상 정상(N/A)'
       )
     }] }}"
 

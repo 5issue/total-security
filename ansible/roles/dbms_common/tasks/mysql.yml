@@ -8,11 +8,29 @@
 #     target = db_conn.service (항목명 자체는 분류표 원문 그대로 유지)
 # =============================================================================
 
-- name: "{{ db_conn.service }} | K8s Secret에서 자격증명 조회"
+- name: "{{ db_conn.service }} | 자격증명 기본값 설정"
+  # ⚠ K8s Secret lookup이 RBAC 미설정 등으로 실패하면 아래 조회 태스크가 ignore_errors로
+  # 넘어가더라도 mysql_login_user/password가 undefined로 남아 이후 모든 태스크가 템플릿
+  # 오류로 중단된다(failed_when으로 못 막는 종류의 실패). 빈 문자열을 먼저 깔아둬서
+  # 조회 실패 시에도 DB 연결 자체만 자격증명 오류로 실패(failed_when: false로 처리됨)하고
+  # 나머지 커넥션·플레이는 계속 진행되게 한다.
   ansible.builtin.set_fact:
-    mysql_login_user: "{{ lookup('kubernetes.core.k8s', kind='Secret', name=db_conn.secret_ref, namespace=db_conn.namespace | default('default')) | json_query('data.username') | b64decode }}"
-    mysql_login_password: "{{ lookup('kubernetes.core.k8s', kind='Secret', name=db_conn.secret_ref, namespace=db_conn.namespace | default('default')) | json_query('data.password') | b64decode }}"
-  when: db_conn.secret_ref is not none
+    mysql_login_user: ""
+    mysql_login_password: ""
+
+- name: "{{ db_conn.service }} | K8s Secret에서 자격증명 조회"
+  # ⚠ 2026-09-14 인프라팀 회신 — MySQL은 서비스별 개별 Secret이 아니라 공용 Secret
+  # (shared-mysql-accounts) 안에 서비스별 키(예: member_service_password)가 들어있는
+  # 구조로 확인됨. username은 이 Secret에 없고, dbms_service_accounts[].account 값과
+  # 동일(예: member_service) — 이 값으로 "{account}_password" 키를 조회한다.
+  vars:
+    mysql_secret_data: "{{ lookup('kubernetes.core.k8s', kind='Secret', name=db_conn.secret_ref, namespace=db_conn.namespace | default('default')).data | default({}) }}"
+    mysql_account_name: "{{ (dbms_service_accounts | selectattr('database', 'equalto', db_conn.service) | map(attribute='account') | list | first) | default(none) }}"
+  ansible.builtin.set_fact:
+    mysql_login_user: "{{ mysql_account_name }}"
+    mysql_login_password: "{{ mysql_secret_data[mysql_account_name + '_password'] | b64decode }}"
+  when: db_conn.secret_ref is not none and mysql_account_name is not none
+  ignore_errors: true
 
 # -----------------------------------------------------------------------------
 # D-01 | 기본 계정 잠금 상태 (root@localhost)
@@ -305,7 +323,7 @@
     check_results: "{{ check_results + [{
       'id': 'D-17', 'item': 'Audit Table은 데이터베이스 관리자 계정으로 접근하도록 제한', 'target': db_conn.service,
       'status': 'SKIP',
-      'detail': 'MySQL은 1차 점검 스코프에서 제외(2026-09-14 인프라팀 회신 — pgAudit이 PostgreSQL 전용, 2차 점검 시 재논의)'
+      'detail': 'MySQL은 1차 점검 스코프에서 제외 — pgAudit이 PostgreSQL 전용, 2차 점검 시 재논의'
     }] }}"
 
 # -----------------------------------------------------------------------------
