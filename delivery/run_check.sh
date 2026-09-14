@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
-# =============================================================================
-# run_check.sh — 인프라 점검 파이프라인 전체 실행 (mgmt 서버 crontab 등록용)
-#
+# run_check.sh — 인프라 점검 파이프라인 전체 실행
 #   사용법: ./run_check.sh <회차> [날짜(YYYYMMDD)]
 #   예시:   ./run_check.sh 1차 20260914
-#           ./run_check.sh 정기점검            # 날짜 생략 시 오늘 날짜 사용
-#
-#   순서: ansible-playbook 실행 -> JSON 결과 -> server_dbms_result.xlsx ->
-#         cloud_check.py -> cloud_result.xlsx -> merge_report.py ->
-#         infra_check_{날짜}_{회차}.xlsx -> SHA-256 해시 파일 생성
-# =============================================================================
 set -euo pipefail
 
 ROUND="${1:?사용법: ./run_check.sh <회차> [날짜(YYYYMMDD)]}"

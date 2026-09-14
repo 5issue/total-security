@@ -1,13 +1,7 @@
 ---
-# =============================================================================
-# roles/file_permission — 서버 U-14~U-30 계열(파일 및 디렉터리 권한) 점검
-#   대상 OS: Amazon Linux 2023 (x86_64)
-#   판정 결과는 halt 하지 않고 전부 수집하여 check_results 리스트에 누적한다.
-# =============================================================================
+# roles/file_permission — 서버 파일·디렉터리 권한 점검
 
-# -----------------------------------------------------------------------------
 # U-14 | PATH 환경변수 관리 (PATH에 "." 포함 금지)
-# -----------------------------------------------------------------------------
 - name: "U-14 | root PATH 조회"
   ansible.builtin.shell: "set -o pipefail && grep -h '^\\s*PATH=' /etc/profile /root/.bash_profile /root/.bashrc 2>/dev/null"
   args:
@@ -26,9 +20,7 @@
       'detail': u14_raw.stdout | default('PATH 설정 조회 실패(기본값 사용 중으로 간주, 참고 필요)', true) | truncate(200)
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-15 | 불필요한 파일 및 디렉터리 제거 (무소유자 파일 0건 기준)
-# -----------------------------------------------------------------------------
 - name: "U-15 | 무소유자·무그룹 파일 조회 (로컬 파일시스템만, -xdev)"
   ansible.builtin.shell: "set -o pipefail && timeout 60 find / -xdev \\( -nouser -o -nogroup \\) 2>/dev/null | head -20"
   args:
@@ -45,9 +37,7 @@
       'detail': '무소유자/무그룹 파일(최대 20건 표시): ' ~ (u15_raw.stdout | default('없음', true))
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-16 | /etc/passwd 파일 보호
-# -----------------------------------------------------------------------------
 - name: "U-16 | /etc/passwd 상태 조회"
   ansible.builtin.stat:
     path: /etc/passwd
@@ -63,9 +53,7 @@
       'detail': 'owner=' ~ u16_stat.stat.pw_name ~ ' mode=' ~ u16_stat.stat.mode ~ ' (기준 <= ' ~ u16_passwd_perm_max ~ ', root 소유)'
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-17 | 링크 파일 보호 (주요 파일이 심볼릭 링크면 FAIL)
-# -----------------------------------------------------------------------------
 - name: "U-17 | 주요 파일 링크 여부 조회"
   ansible.builtin.stat:
     path: "{{ item }}"
@@ -82,9 +70,7 @@
       'detail': '심볼릭 링크로 존재하는 주요 파일: ' ~ (u17_links | join(', ') if u17_links | length > 0 else '없음')
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-18 | /etc/shadow 파일 보호
-# -----------------------------------------------------------------------------
 - name: "U-18 | /etc/shadow 상태 조회"
   ansible.builtin.stat:
     path: /etc/shadow
@@ -100,9 +86,7 @@
       'detail': 'owner=' ~ u18_stat.stat.pw_name ~ ' mode=' ~ u18_stat.stat.mode ~ ' (기준 <= ' ~ u18_shadow_perm_max ~ ', root 소유)'
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-19 | /etc/hosts 파일 보호
-# -----------------------------------------------------------------------------
 - name: "U-19 | /etc/hosts 상태 조회"
   ansible.builtin.stat:
     path: /etc/hosts
@@ -118,9 +102,7 @@
       'detail': 'owner=' ~ u19_stat.stat.pw_name ~ ' mode=' ~ u19_stat.stat.mode ~ ' (기준 <= ' ~ u19_hosts_perm_max ~ ', root 소유)'
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-20 | xinetd.conf 및 관련 파일 보호 (xinetd 미사용 시 파일 없으면 PASS)
-# -----------------------------------------------------------------------------
 - name: "U-20 | xinetd.conf 상태 조회"
   ansible.builtin.stat:
     path: /etc/xinetd.conf
@@ -136,9 +118,7 @@
       'detail': ('xinetd.conf 없음(미사용, 양호)' if not u20_stat.stat.exists else ('owner=' ~ u20_stat.stat.pw_name ~ ' mode=' ~ u20_stat.stat.mode ~ ' (기준 <= ' ~ u20_xinetd_perm_max ~ ')'))
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-21 | rsyslog.conf 파일 보호
-# -----------------------------------------------------------------------------
 - name: "U-21 | rsyslog.conf 상태 조회"
   ansible.builtin.stat:
     path: /etc/rsyslog.conf
@@ -154,9 +134,7 @@
       'detail': ('rsyslog.conf 없음' if not u21_stat.stat.exists else ('owner=' ~ u21_stat.stat.pw_name ~ ' mode=' ~ u21_stat.stat.mode ~ ' (기준 <= ' ~ u21_syslog_perm_max ~ ')'))
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-22 | services 파일 보호
-# -----------------------------------------------------------------------------
 - name: "U-22 | /etc/services 상태 조회"
   ansible.builtin.stat:
     path: /etc/services
@@ -172,9 +150,7 @@
       'detail': 'owner=' ~ u22_stat.stat.pw_name ~ ' mode=' ~ u22_stat.stat.mode ~ ' (기준 <= ' ~ u22_services_perm_max ~ ')'
     }] }}"
 
-# -----------------------------------------------------------------------------
-# U-23 | SUID/SGID 설정 점검 [확정 기준값: group_vars/all.yml]
-# -----------------------------------------------------------------------------
+# U-23 | SUID/SGID 설정 점검
 - name: "U-23 | SUID/SGID 파일 조회 (로컬 파일시스템만, -xdev)"
   ansible.builtin.shell: "set -o pipefail && timeout 90 find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) 2>/dev/null"
   args:
@@ -194,9 +170,7 @@
       'detail': '화이트리스트 밖 SUID/SGID 파일: ' ~ (u23_unauthorized | join(', ') if u23_unauthorized | length > 0 else '없음')
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-24 | 사용자 환경 파일 보호 (그룹/전체 쓰기 권한 금지)
-# -----------------------------------------------------------------------------
 - name: "U-24 | 사용자 환경파일 쓰기권한 조회"
   ansible.builtin.shell: >
     set -o pipefail &&
@@ -219,9 +193,7 @@
       'detail': '그룹/전체 쓰기권한 있는 환경파일: ' ~ (u24_raw.stdout | default('없음', true))
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-25 | world writable 파일 점검
-# -----------------------------------------------------------------------------
 - name: "U-25 | world writable 파일 조회 (제외 경로 반영, -xdev)"
   ansible.builtin.shell: >
     set -o pipefail &&
@@ -242,9 +214,7 @@
       'detail': 'world writable 파일(최대 20건, 표준 제외경로 밖): ' ~ (u25_raw.stdout | default('없음', true))
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-26 | 중요 디바이스 파일 보호 (스냅샷 대조, 값 없으면 SKIP)
-# -----------------------------------------------------------------------------
 - name: "U-26 | 현재 /dev 목록 조회"
   ansible.builtin.shell: >
     set -o pipefail &&
@@ -273,9 +243,7 @@
       )
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-27 | hosts.equiv / .rhosts 파일 보호
-# -----------------------------------------------------------------------------
 - name: "U-27 | /etc/hosts.equiv 상태 조회"
   ansible.builtin.stat:
     path: /etc/hosts.equiv
@@ -300,10 +268,7 @@
       'detail': 'hosts.equiv exists=' ~ (u27_equiv_stat.stat.exists | string) ~ ' / 발견된 .rhosts: ' ~ (u27_rhosts_found | join(', ') if u27_rhosts_found | length > 0 else '없음')
     }] }}"
 
-# -----------------------------------------------------------------------------
-# U-28 | IP 기반 접근제어 [기준값필요: u28_allowed_ips]
-#   firewalld의 zone별 source 제한 설정 여부로 판정(AL2023 기본 방화벽).
-# -----------------------------------------------------------------------------
+# U-28 | IP 기반 접근제어
 - name: "U-28 | firewalld 활성 상태 조회"
   ansible.builtin.shell: "systemctl is-active firewalld 2>/dev/null || echo inactive"
   args:
@@ -323,9 +288,6 @@
 
 - name: "U-28 | 판정 기록"
   vars:
-    # ⚠ "'active' in stdout" 방식은 'inactive' 문자열에도 'active'가 부분 문자열로
-    # 포함돼 있어(in-ACTIVE) 항상 참이 되는 버그였다(로컬 VM 실측으로 확인, 2026-09-13) —
-    # 정확히 일치하는지(==)로 비교해야 한다.
     u28_firewalld_is_active: "{{ (u28_firewalld_active.stdout | default('') | trim) == 'active' }}"
     u28_has_source_restriction: "{{ (u28_sources_raw.stdout | default('') | trim | length) > 0 }}"
   ansible.builtin.set_fact:
@@ -342,9 +304,7 @@
       )
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-29 | hosts.lpd 파일 보호
-# -----------------------------------------------------------------------------
 - name: "U-29 | /etc/hosts.lpd 상태 조회"
   ansible.builtin.stat:
     path: /etc/hosts.lpd
@@ -360,9 +320,7 @@
       'detail': ('hosts.lpd 없음(미사용, 양호)' if not u29_stat.stat.exists else ('mode=' ~ u29_stat.stat.mode ~ ' (기준 <= ' ~ u29_hosts_lpd_perm_max ~ ')'))
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-30 | UMASK 설정
-# -----------------------------------------------------------------------------
 - name: "U-30 | UMASK 설정 조회"
   ansible.builtin.shell: "set -o pipefail && grep -rh '^\\s*umask' /etc/profile /etc/bashrc /etc/login.defs 2>/dev/null | head -1"
   args:
@@ -381,11 +339,7 @@
       'detail': u30_raw.stdout | default('UMASK 명시 설정 없음(시스템 기본값 022로 간주)', true)
     }] }}"
 
-# -----------------------------------------------------------------------------
-# U-31 | 숨김 디렉터리 점검 [N/A 확정 — 2026-09-13 인프라팀 노션 회신]
-#   EKS 관리형 워커노드는 사용자 정의 숨김파일이 없는 것이 정상(N/A). OS/도구 표준
-#   항목(u31_os_baseline_hidden_entries) 외의 것이 발견되면 FAIL로 자동판정한다.
-# -----------------------------------------------------------------------------
+# U-31 | 숨김 디렉터리 점검
 - name: "U-31 | 사용자 홈 숨김 디렉터리 조회"
   ansible.builtin.shell: "set -o pipefail && for h in $(awk -F: '$3>=1000 {print $6}' /etc/passwd); do find \"$h\" -maxdepth 1 -type d -name '.*' 2>/dev/null | grep -vE '(^\\.$|/\\.\\.?$)'; done"
   args:
@@ -408,11 +362,7 @@
       )
     }] }}"
 
-# -----------------------------------------------------------------------------
-# U-33 | 불필요한 파일 제거 [N/A 확정 — 2026-09-13 인프라팀 노션 회신]
-#   컨테이너 기반 인프라라 애플리케이션/소스코드가 노드에 존재하지 않는 것이 정상(N/A).
-#   업무 파일 배치 경로(u33_business_file_dirs)에서 파일이 발견되면 FAIL로 자동판정한다.
-# -----------------------------------------------------------------------------
+# U-33 | 불필요한 파일 제거
 - name: "U-33 | 업무 파일 배치 경로 조회"
   ansible.builtin.shell: >
     set -o pipefail &&
@@ -436,9 +386,7 @@
       )
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-32 | 홈 디렉터리 관리 (소유자 일치, 그룹/전체 쓰기 금지)
-# -----------------------------------------------------------------------------
 - name: "U-32 | 홈 디렉터리 소유자·권한 위반 조회"
   ansible.builtin.shell: |
     set -o pipefail
@@ -468,9 +416,7 @@
       'detail': '위반 사항: ' ~ ((u32_raw.stdout_lines | default([])) | join('; ') if u32_raw.stdout | default('') | length > 0 else '없음')
     }] }}"
 
-# -----------------------------------------------------------------------------
 # U-67 | 로그 디렉터리 소유자 및 권한 설정
-# -----------------------------------------------------------------------------
 - name: "U-67 | /var/log 내 로그파일 소유자·권한 위반 조회"
   ansible.builtin.shell: "set -o pipefail && find /var/log -maxdepth 2 -type f \\( ! -user root -o -perm -0022 \\) 2>/dev/null | head -20"
   args:

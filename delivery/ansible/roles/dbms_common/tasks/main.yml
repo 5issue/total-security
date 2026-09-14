@@ -1,0 +1,78 @@
+---
+# roles/dbms_common — DBMS 점검
+
+- name: "DBMS 점검 대상 커넥션 존재 여부 확인"
+  ansible.builtin.debug:
+    msg: >-
+      dbms_connections 가 비어있어 실제 DB 조회 대신 SKIP 행만 생성합니다.
+      group_vars/all.yml 에 DB host/port/secret_ref 확정 후 재실행 필요.
+  when: dbms_connections | length == 0
+
+- name: "DBMS | 커넥션 없을 때 SKIP 행 생성"
+  vars:
+    dbms_coded_items:
+      - {id: 'D-01', item: '기본 계정 비밀번호 변경·잠금'}
+      - {id: 'D-02', item: '불필요 계정 제거'}
+      - {id: 'D-03', item: '비밀번호 사용기간·복잡도'}
+      - {id: 'D-04', item: '관리자 권한 최소 인원'}
+      - {id: 'D-05', item: '비밀번호 재사용 제한'}
+      - {id: 'D-06', item: '계정 개별 부여'}
+      - {id: 'D-07', item: 'root 권한 서비스 구동 제한'}
+      - {id: 'D-08', item: '안전한 암호화 알고리즘 사용'}
+      - {id: 'D-09', item: '로그인 실패 잠금 정책'}
+      - {id: 'D-10', item: '원격 DB 서버 접속 제한'}
+      - {id: 'D-11', item: '시스템 테이블 접근 제한'}
+      - {id: 'D-14', item: '주요 설정·비밀번호 파일 접근 권한'}
+      - {id: 'D-17', item: 'Audit Table 접근 제한'}
+      - {id: 'D-18', item: 'PUBLIC Role 권한 제한'}
+      - {id: 'D-20', item: '인가되지 않은 Object Owner 제한'}
+      - {id: 'D-21', item: 'GRANT OPTION 최소화'}
+      - {id: 'D-25', item: '주기적 보안 패치 적용'}
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': item.id, 'item': item.item, 'status': 'SKIP',
+      'detail': 'DB 파드 미구축 또는 dbms_connections 미설정 — 접속 정보 확정 후 재실행 필요',
+      'target': '해당없음(DB 미구축)'
+    }] }}"
+  loop: "{{ dbms_coded_items }}"
+  loop_control:
+    loop_var: item
+    label: "{{ item.id }}"
+  when: dbms_connections | length == 0
+
+- name: "MySQL 대상 SQL 점검 실행"
+  ansible.builtin.include_tasks: mysql.yml
+  loop: "{{ dbms_connections | selectattr('engine', 'equalto', 'mysql') | list }}"
+  loop_control:
+    loop_var: db_conn
+    label: "{{ db_conn.service }}"
+  when: dbms_connections | length > 0
+
+- name: "PostgreSQL 대상 SQL 점검 실행"
+  ansible.builtin.include_tasks: postgresql.yml
+  loop: "{{ dbms_connections | selectattr('engine', 'equalto', 'postgresql') | list }}"
+  loop_control:
+    loop_var: db_conn
+    label: "{{ db_conn.service }}"
+  when: dbms_connections | length > 0
+
+- name: "파드 레벨 점검(D-07, D-14) 실행"
+  ansible.builtin.include_tasks: k8s_pod_checks.yml
+  loop: "{{ dbms_connections }}"
+  loop_control:
+    loop_var: db_conn
+    label: "{{ db_conn.service }}"
+  when: dbms_connections | length > 0
+
+# D-26 | 감사기록 보관기간
+- name: "D-26 | DBMS 감사기록 보관기간 점검 — mgmt 서버 AWS API 조회"
+  ansible.builtin.include_role:
+    name: log_patch_check
+    tasks_from: log_retention_check
+  vars:
+    lrc_item_id: "D-26"
+    lrc_item_name: "데이터베이스의 접근, 변경, 삭제 등의 감사 기록이 기관의 감사 기록 정책에 적합하도록 설정"
+    lrc_log_group_name: "{{ d26_audit_log_group_name }}"
+    lrc_target: "전체(DBMS 감사로그)"
+    lrc_min_days: 365
+  run_once: true

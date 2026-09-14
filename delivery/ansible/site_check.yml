@@ -1,0 +1,48 @@
+---
+# site_check.yml — 인프라 점검 마스터 Playbook
+
+- name: "서버 점검 — 계정·인증(A-1) / 파일권한(A-2) / 서비스관리(A-3)"
+  hosts: server_targets   # inventory 그룹명 (워커노드 + NAT 인스턴스)
+  gather_facts: true
+  vars:
+    check_results: []
+    check_round: "정기점검"
+  roles:
+    - account_auth
+    - file_permission
+    - network_service
+    - log_patch_check
+  tasks:
+    - name: "U-66 | 시스템 로깅 정책 점검 — mgmt 서버 AWS API 조회"
+      ansible.builtin.include_role:
+        name: log_patch_check
+        tasks_from: u66_check
+      run_once: true
+
+    - name: "결과 요약 출력"
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} — PASS {{ check_results | selectattr('status','equalto','PASS') | list | length }} / FAIL {{ check_results | selectattr('status','equalto','FAIL') | list | length }} / 총 {{ check_results | length }}"
+
+    - name: "결과 파일 저장 (실행 주체 로컬)"
+      ansible.builtin.copy:
+        content: "{{ { 'host': inventory_hostname, 'checked_at': ansible_date_time.iso8601, 'round': check_round, 'results': check_results } | to_nice_json }}"
+        dest: "./results/{{ inventory_hostname }}_{{ ansible_date_time.date }}.json"
+      delegate_to: localhost
+
+- name: "DBMS 점검"
+  hosts: localhost   # DB 클라이언트 커넥션은 controller(mgmt 서버)에서 네트워크로 접속
+  gather_facts: true
+  vars:
+    check_results: []
+    check_round: "정기점검"
+  roles:
+    - dbms_common
+  tasks:
+    - name: "결과 요약 출력"
+      ansible.builtin.debug:
+        msg: "DBMS — PASS {{ check_results | selectattr('status','equalto','PASS') | list | length }} / FAIL {{ check_results | selectattr('status','equalto','FAIL') | list | length }} / N/A·SKIP·REVIEW {{ check_results | rejectattr('status','in',['PASS','FAIL']) | list | length }} / 총 {{ check_results | length }}"
+
+    - name: "결과 파일 저장"
+      ansible.builtin.copy:
+        content: "{{ { 'checked_at': ansible_date_time.iso8601, 'round': check_round, 'results': check_results } | to_nice_json }}"
+        dest: "./results/dbms_{{ ansible_date_time.date }}.json"

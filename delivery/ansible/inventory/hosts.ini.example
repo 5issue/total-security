@@ -1,0 +1,25 @@
+# 인벤토리 예시 — SSM 커넥션 기반(SSH 키 미사용). 실제 인스턴스 ID를 채워서 사용.
+
+[server_targets]
+; worker-node-1 ansible_host=i-xxxxxxxxxxxxxxxxx
+; worker-node-2 ansible_host=i-yyyyyyyyyyyyyyyyy
+; eks-nat-instance-2a ansible_host=i-zzzzzzzzzzzzzzzzz
+; eks-nat-instance-2c ansible_host=i-wwwwwwwwwwwwwwwww
+
+# U-64가 워커노드/NAT를 서로 다른 AMI 기준으로 비교하기 위해 참조하는 그룹 — 실제 인스턴스
+# ID 확정 후 아래 그룹에도 정확히 배정할 것.
+[eks_worker_nodes]
+; worker-node-1
+; worker-node-2
+
+[nat_instances]
+; eks-nat-instance-2a
+; eks-nat-instance-2c
+
+[server_targets:vars]
+ansible_connection=aws_ssm
+ansible_aws_ssm_bucket_name=<S3버킷명>   ; SSM 파일 전송용 버킷
+ansible_aws_ssm_region=ap-northeast-2
+ansible_python_interpreter=/usr/bin/python3
+ansible_become=true
+ansible_become_method=sudo
