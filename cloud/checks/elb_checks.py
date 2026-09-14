@@ -1,10 +1,10 @@
 """3.10 — ELB(ALB) 연결 관리(제어 정책) 점검.
 
-인프라팀 협의 완료(2026-09-10, 판정유형 제외→기준값필요 재분류)로 8개 세부 기준 중
-7개가 확정됨: ①리스너 443+80리다이렉트 ②SSL Policy TLS1.2 미만 미사용 ③액세스로그
-활성화(SSE-S3) ④Deletion Protection 활성화 ⑥헬스체크(경로 /, 200-399, 기본값
-15초/5초/2/2) ⑦ALB 보안그룹 443/80만 허용 ⑧Cross-Zone Load Balancing 자동활성화.
-⑤Idle Timeout만 config.ELB_IDLE_TIMEOUT_SECONDS 확정 전까지 판정에서 제외한다.
+인프라팀 협의 완료(2026-09-13, 8/8 전체 확정)로 판정유형 "제외"→"자동판정가능"으로
+전환: ①리스너 443+80리다이렉트 ②SSL Policy TLS1.2 미만 미사용 ③액세스로그 활성화
+(SSE-S3) ④Deletion Protection 활성화 ⑤Idle Timeout >= 60초(config.ELB_IDLE_TIMEOUT_
+SECONDS) ⑥헬스체크(경로 /, 200-399, 기본값 15초/5초/2/2) ⑦ALB 보안그룹 443/80만
+허용 ⑧Cross-Zone Load Balancing 자동활성화.
 
 이 항목ID(3.10)는 분류표상 한 행이라, ALB/기준별 위반사항을 모아 하나의 PASS/FAIL로
 집계한다(개별 ALB 위반 내역은 상세 컬럼에 나열).
@@ -73,15 +73,15 @@ def _check_alb(elbv2, ec2, lb):
     if _attr(attrs, "deletion_protection.enabled") != "true":
         violations.append("Deletion Protection 비활성화")
 
-    # ⑤ Idle Timeout — 기준값 확정 전까지 판정 제외, 참고용으로만 표시
+    # ⑤ Idle Timeout — [확정 2026-09-13] 절대기준 ">= 60초"(정확히 60초도 PASS, `<`로만 FAIL)
     idle_timeout = _attr(attrs, "idle_timeout.timeout_seconds")
     idle_note = f"Idle Timeout={idle_timeout}s"
     if config.ELB_IDLE_TIMEOUT_SECONDS is not None and idle_timeout is not None:
-        if int(idle_timeout) != int(config.ELB_IDLE_TIMEOUT_SECONDS):
-            violations.append(f"Idle Timeout {idle_timeout}s (기준 {config.ELB_IDLE_TIMEOUT_SECONDS}s)")
-        idle_note += f" (기준 {config.ELB_IDLE_TIMEOUT_SECONDS}s)"
+        if int(idle_timeout) < int(config.ELB_IDLE_TIMEOUT_SECONDS):
+            violations.append(f"Idle Timeout {idle_timeout}s (기준 {config.ELB_IDLE_TIMEOUT_SECONDS}s 이상)")
+        idle_note += f" (기준 {config.ELB_IDLE_TIMEOUT_SECONDS}s 이상)"
     else:
-        idle_note += " (기준값 미확정 — BE-인프라팀 협의 중, 판정 제외)"
+        idle_note += " (기준값 미확정 — 판정 제외)"
 
     # ⑥ 헬스체크 경로 '/', 200-399, 기본값(간격15초/타임아웃5초/정상2/비정상2)
     tgs_res, terr = safe_call(elbv2.describe_target_groups, LoadBalancerArn=arn)
@@ -121,7 +121,11 @@ def check_3_10_elb_control_policy(elbv2, ec2):
         return [make_result("3.10", "ELB(Elastic Load Balancing) 연결 관리", "SKIP", f"ELB 목록 조회 실패: {err}")]
     albs = [lb for lb in lbs_res["LoadBalancers"] if lb.get("Type") == "application"]
     if not albs:
-        return [make_result("3.10", "ELB(Elastic Load Balancing) 연결 관리", "N/A", "ALB 없음 — 해당없음")]
+        # ⚠ RDS(3.8/4.2/4.9, 영구 미사용 확정)와 달리 ALB는 이 아키텍처에 실제로 존재하는
+        # 핵심 리소스라 "없음"이 정책상 해당없음(N/A)일 수 없다 — 로컬 테스트 계정처럼
+        # ALB 자체가 없는 환경이거나, 운영에서라면 조회 재확인이 필요해 SKIP이 맞다.
+        return [make_result("3.10", "ELB(Elastic Load Balancing) 연결 관리", "SKIP",
+                             "ALB 없음 — 로컬 테스트 계정처럼 ALB 미사용 환경이거나 운영에서는 조회 결과 재확인 필요")]
 
     all_violations = []
     idle_notes = []

@@ -43,18 +43,22 @@
   register: u35_guest_raw
   changed_when: false
   failed_when: false
-  when: "'active' in u35_smb_active.stdout"
+  when: (u35_smb_active.stdout | default('') | trim) == 'active'
 
 - name: "U-35 | 판정 기록"
+  vars:
+    # ⚠ "'active' in stdout" 은 'inactive'에도 'active'가 부분 문자열로 포함돼 항상 참이
+    # 되는 버그였다(로컬 VM 실측, 2026-09-13) — 정확히 일치하는지(==)로 비교해야 한다.
+    u35_smb_is_active: "{{ (u35_smb_active.stdout | default('') | trim) == 'active' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-35', 'item': '공유 서비스 익명 접근 제한',
       'status': (
-        'PASS' if 'active' not in u35_smb_active.stdout else
+        'PASS' if not u35_smb_is_active else
         ('FAIL' if (u35_guest_raw.stdout | default('') | length > 0) else 'PASS')
       ),
       'detail': (
-        'Samba(smb) 미사용(양호)' if 'active' not in u35_smb_active.stdout
+        'Samba(smb) 미사용(양호)' if not u35_smb_is_active
         else ('게스트 접근 허용 설정 발견: ' ~ u35_guest_raw.stdout if u35_guest_raw.stdout | default('') | length > 0 else 'guest ok 미설정(양호)')
       )
     }] }}"
@@ -135,11 +139,17 @@
   changed_when: false
   failed_when: false
 
+# ⚠ "'active' in stdout" 은 'inactive'에도 'active'가 부분 문자열로 포함돼 항상 참이
+# 되는 버그였다(로컬 VM 실측, 2026-09-13) — 정확히 일치하는지(==)로 비교해야 한다.
+- name: "U-39 | nfs-server 활성 여부 계산"
+  ansible.builtin.set_fact:
+    u39_nfs_is_active: "{{ (u39_raw.stdout | default('') | trim) == 'active' }}"
+
 - name: "U-39 | 판정 기록"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-39', 'item': '불필요한 NFS 서비스 비활성화',
-      'status': 'PASS' if 'active' not in u39_raw.stdout else 'FAIL',
+      'status': 'PASS' if not u39_nfs_is_active else 'FAIL',
       'detail': 'nfs-server: ' ~ (u39_raw.stdout | trim)
     }] }}"
 
@@ -151,13 +161,13 @@
   register: u40_exports_raw
   changed_when: false
   failed_when: false
-  when: "'active' in u39_raw.stdout"
+  when: u39_nfs_is_active
 
 - name: "U-40 | /etc/exports 권한 조회"
   ansible.builtin.stat:
     path: /etc/exports
   register: u40_exports_stat
-  when: "'active' in u39_raw.stdout"
+  when: u39_nfs_is_active
 
 - name: "U-40 | 판정 기록"
   vars:
@@ -168,12 +178,12 @@
     check_results: "{{ check_results + [{
       'id': 'U-40', 'item': 'NFS 접근 통제',
       'status': (
-        'N/A' if 'active' not in u39_raw.stdout else
+        'N/A' if not u39_nfs_is_active else
         ('FAIL' if (u40_has_wildcard or not u40_perm_ok) else
          ('SKIP' if u40_nfs_allowed_hosts is none else 'PASS'))
       ),
       'detail': (
-        'NFS 미사용(해당없음)' if 'active' not in u39_raw.stdout
+        'NFS 미사용(해당없음)' if not u39_nfs_is_active
         else ('exports 내용: ' ~ (u40_content | default('없음') | truncate(150)) ~
               (' — 허용호스트 화이트리스트(u40_nfs_allowed_hosts) TODO' if u40_nfs_allowed_hosts is none else ''))
       )
@@ -191,10 +201,14 @@
   failed_when: false
 
 - name: "U-41 | 판정 기록"
+  # ⚠ "'active' in stdout"은 'inactive'에도 'active'가 부분 문자열로 포함돼 항상 참이
+  # 되는 버그였다(로컬 VM 실측, 2026-09-13) — 정확히 일치하는지(==)로 비교해야 한다.
+  vars:
+    u41_autofs_is_active: "{{ (u41_raw.stdout | default('') | trim) == 'active' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-41', 'item': '불필요한 automountd 제거',
-      'status': 'PASS' if 'active' not in u41_raw.stdout else 'FAIL',
+      'status': 'PASS' if not u41_autofs_is_active else 'FAIL',
       'detail': 'autofs: ' ~ (u41_raw.stdout | trim)
     }] }}"
 
@@ -461,10 +475,14 @@
   failed_when: false
 
 - name: "U-52 | 판정 기록"
+  # ⚠ "'active' in stdout"은 'inactive'에도 'active'가 부분 문자열로 포함돼 항상 참이
+  # 되는 버그였다(로컬 VM 실측, 2026-09-13) — 정확히 일치하는지(==)로 비교해야 한다.
+  vars:
+    u52_telnet_is_active: "{{ (u52_raw.stdout | default('') | trim) == 'active' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-52', 'item': 'Telnet 서비스 비활성화',
-      'status': 'PASS' if 'active' not in u52_raw.stdout else 'FAIL',
+      'status': 'PASS' if not u52_telnet_is_active else 'FAIL',
       'detail': 'telnet.socket: ' ~ (u52_raw.stdout | trim)
     }] }}"
 
@@ -701,11 +719,15 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-65 | NTP 및 시각 동기화 설정 [기준값필요: u65_ntp_allowed_servers]
-#   Amazon Linux 2023 기본: chrony
+# U-65 | NTP 및 시각 동기화 설정 [확정 — Amazon Time Sync(169.254.169.123)]
+#   Amazon Linux 2023 기본: chrony. ⚠ AL2023(RHEL9 계열)은 chrony.conf에 server/pool을
+#   직접 쓰지 않고 `sourcedir /etc/chrony.d`(정적) 및 `sourcedir /run/chrony.d`(DHCP
+#   동적 주입)로 위임하는 게 표준 — chrony.conf만 grep하면 실제 소스를 놓친다(파일럿
+#   VM 실측으로 확인된 버그, 2026-09-13). 파일을 뒤지는 대신 `chronyc -n sources`로
+#   데몬이 실제 사용 중인 소스를 직접 조회한다(설정 방식과 무관하게 항상 정확).
 # -----------------------------------------------------------------------------
-- name: "U-65 | chrony 설정 서버 조회"
-  ansible.builtin.shell: "set -o pipefail && grep -E '^\\s*(server|pool)\\s' /etc/chrony.conf 2>/dev/null | awk '{print $2}'"
+- name: "U-65 | chrony 활성 소스 조회(chronyc)"
+  ansible.builtin.shell: "set -o pipefail && chronyc -n sources 2>/dev/null | tail -n +3 | awk '{print $2}'"
   args:
     executable: /bin/bash
   register: u65_raw

@@ -61,19 +61,18 @@ def apply_test_config():
 
 
 def discover_eks_clusters(eks, override):
+    """반환: (cluster_names, discovery_error). discovery_error는 API 호출 자체가
+    실패했을 때만 채워진다 — "정상 조회됐는데 0개"와 구분해야 최종 리포트에서
+    SKIP 사유(조회 실패 vs 진짜 없음)를 정확히 표시할 수 있다."""
     if override:
-        return [c.strip() for c in override.split(",") if c.strip()]
+        return [c.strip() for c in override.split(",") if c.strip()], None
     if config.EKS_CLUSTER_NAMES:
-        return config.EKS_CLUSTER_NAMES
-    clusters, err = None, None
+        return config.EKS_CLUSTER_NAMES, None
     try:
-        clusters = eks.list_clusters()["clusters"]
+        return eks.list_clusters()["clusters"], None
     except Exception as exc:  # noqa: BLE001
-        err = str(exc)
-    if err:
-        print(f"[경고] EKS 클러스터 자동탐색 실패: {err}", file=sys.stderr)
-        return []
-    return clusters
+        print(f"[경고] EKS 클러스터 자동탐색 실패: {exc}", file=sys.stderr)
+        return [], str(exc)
 
 
 def main():
@@ -107,8 +106,8 @@ def main():
     results += logging_checks.run_all(elbv2, logs, ec2, cloudtrail)
     results += elb_checks.run_all(elbv2, ec2)
 
-    cluster_names = discover_eks_clusters(eks, args.eks_clusters)
-    results += eks_checks.run_all(eks, cluster_names)
+    cluster_names, discovery_error = discover_eks_clusters(eks, args.eks_clusters)
+    results += eks_checks.run_all(eks, iam, ec2, cluster_names, discovery_error)
 
     for item_id, item_name in EXCLUDED_ITEMS:
         results.append(make_result(item_id, item_name, "N/A", EXCLUDED_DETAIL))
