@@ -26,6 +26,8 @@ import com.totalsecurity.sast.ir.statement.SwitchStatement;
 import com.totalsecurity.sast.ir.statement.ThrowStatement;
 import com.totalsecurity.sast.ir.statement.VariableDeclarationStatement;
 import com.totalsecurity.sast.ir.statement.WhileStatement;
+import com.totalsecurity.sast.taint.model.MethodTaintSemantics;
+import com.totalsecurity.sast.taint.model.MethodTaintSemanticsProvider;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -42,10 +44,18 @@ import java.util.Set;
 /** Intraprocedural may-taint propagation over stable STEP 4 definitions and use sites. */
 public final class IntraproceduralTaintAnalysis {
     public TaintAnalysisResult analyze(DataFlowResult dataFlow, Collection<? extends TaintSeed> seeds) {
+        return analyze(dataFlow, seeds, MethodTaintSemanticsProvider.none());
+    }
+
+    public TaintAnalysisResult analyze(
+            DataFlowResult dataFlow,
+            Collection<? extends TaintSeed> seeds,
+            MethodTaintSemanticsProvider methodSemantics) {
         Objects.requireNonNull(dataFlow, "dataFlow");
         Objects.requireNonNull(seeds, "seeds");
+        Objects.requireNonNull(methodSemantics, "methodSemantics");
         ExpressionIndex expressions = ExpressionIndex.build(dataFlow);
-        AnalysisContext context = new AnalysisContext(dataFlow, expressions, seeds);
+        AnalysisContext context = new AnalysisContext(dataFlow, expressions, seeds, methodSemantics);
         Map<Definition, Set<Definition>> dependents = buildDependents(dataFlow);
 
         ArrayDeque<Definition> worklist = new ArrayDeque<>();
@@ -135,6 +145,7 @@ public final class IntraproceduralTaintAnalysis {
         private final DataFlowResult dataFlow;
         private final ExpressionIndex expressions;
         private final Set<TaintSeed> seeds;
+        private final MethodTaintSemanticsProvider methodSemantics;
         private final Map<Definition, List<TaintSeed>> definitionSeeds = new LinkedHashMap<>();
         private final IdentityHashMap<Expression, List<TaintSeed>> expressionSeeds =
                 new IdentityHashMap<>();
@@ -162,10 +173,12 @@ public final class IntraproceduralTaintAnalysis {
         private AnalysisContext(
                 DataFlowResult dataFlow,
                 ExpressionIndex expressions,
-                Collection<? extends TaintSeed> seeds) {
+                Collection<? extends TaintSeed> seeds,
+                MethodTaintSemanticsProvider methodSemantics) {
             this.dataFlow = dataFlow;
             this.expressions = expressions;
             this.seeds = Collections.unmodifiableSet(new LinkedHashSet<>(seeds));
+            this.methodSemantics = methodSemantics;
             validateAndIndexSeeds();
         }
 
@@ -299,8 +312,11 @@ public final class IntraproceduralTaintAnalysis {
             Optional<TaintValue> receiver = call.call().receiver().map(this::evaluateExpression);
             List<TaintValue> arguments =
                     call.call().arguments().stream().map(this::evaluateExpression).toList();
-            TaintValue result = TaintValue.unknown();
-            if (!expressionSeeds.containsKey(call)) {
+            Optional<MethodTaintSemantics> matched = methodSemantics.semanticsFor(call);
+            TaintValue result = matched
+                    .map(semantics -> applyMethodSemantics(call, receiver, arguments, semantics))
+                    .orElseGet(TaintValue::unknown);
+            if (matched.isEmpty() && !expressionSeeds.containsKey(call)) {
                 unsupported.add(new UnsupportedTaint(
                         "method call result",
                         "Return taint is UNKNOWN without an explicit expression seed or propagation model",
@@ -308,6 +324,66 @@ public final class IntraproceduralTaintAnalysis {
             }
             methodCalls.put(call, new MethodCallTaint(call, receiver, arguments, result));
             return result;
+        }
+
+        private TaintValue applyMethodSemantics(
+                MethodCallExpression call,
+                Optional<TaintValue> receiver,
+                List<TaintValue> arguments,
+                MethodTaintSemantics semantics) {
+            return switch (semantics.behavior()) {
+                case UNKNOWN_RETURN -> TaintValue.unknown();
+                case SANITIZED_RETURN -> TaintValue.clean();
+                case PROPAGATE_RECEIVER_TO_RETURN -> {
+                    TaintValue value = receiver.orElseGet(TaintValue::unknown);
+                    connectMethodPart(call.call().receiver(), value, call);
+                    yield value;
+                }
+                case PROPAGATE_ARGUMENTS_TO_RETURN -> {
+                    connectMethodArguments(call, arguments, allArgumentIndexes(arguments.size()));
+                    yield TaintValue.join(arguments);
+                }
+                case PROPAGATE_SELECTED_ARGUMENTS_TO_RETURN -> {
+                    List<Integer> indexes = semantics.selectedArgumentIndexes().stream().sorted().toList();
+                    if (indexes.stream().anyMatch(index -> index >= arguments.size())) {
+                        throw new IllegalArgumentException("Method model selected an argument outside the call");
+                    }
+                    List<TaintValue> selected = indexes.stream().map(arguments::get).toList();
+                    connectMethodArguments(call, arguments, indexes);
+                    yield TaintValue.join(selected);
+                }
+                case PROPAGATE_RECEIVER_AND_ARGUMENTS_TO_RETURN -> {
+                    List<TaintValue> parts = new ArrayList<>();
+                    receiver.ifPresent(parts::add);
+                    parts.addAll(arguments);
+                    receiver.ifPresent(value -> connectMethodPart(call.call().receiver(), value, call));
+                    connectMethodArguments(call, arguments, allArgumentIndexes(arguments.size()));
+                    yield parts.isEmpty() ? TaintValue.unknown() : TaintValue.join(parts);
+                }
+            };
+        }
+
+        private List<Integer> allArgumentIndexes(int size) {
+            List<Integer> indexes = new ArrayList<>(size);
+            for (int index = 0; index < size; index++) {
+                indexes.add(index);
+            }
+            return indexes;
+        }
+
+        private void connectMethodArguments(
+                MethodCallExpression call, List<TaintValue> arguments, List<Integer> indexes) {
+            for (int index : indexes) {
+                connectMethodPart(
+                        Optional.of(call.call().arguments().get(index)), arguments.get(index), call);
+            }
+        }
+
+        private void connectMethodPart(
+                Optional<Expression> expression, TaintValue value, MethodCallExpression call) {
+            if (value.state() == TaintState.TAINTED && expression.isPresent()) {
+                addEdge(terminalStep(expression.orElseThrow()), step(call));
+            }
         }
 
         private TaintValue evaluateObjectCreation(ObjectCreationExpression creation) {
