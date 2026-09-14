@@ -64,8 +64,13 @@ DBMS 결과 항목에는 `target`(서비스명) 필드가 추가로 포함된다
 
 | 항목 | 이유 |
 |---|---|
-| U-08,23,26,28,31,33,40,45,47,49,50,51,56,61,65 / D-02,03,04,05,06,17,20 | 기준값 TODO — `group_vars/all.yml`에 표시. 값 확정 시 해당 파일만 수정 |
-| U-64 | `u64_ssm_patch_manager_confirmed` TODO(확인요청 표 18번) — SSM Patch Manager 사용 확정 전까지 SKIP |
-| U-66, D-26 | `u66_log_group_name` / `d26_audit_log_group_name` TODO(확인요청 표 17번) — 로그그룹명 확정 전까지 SKIP |
+| U-26,28 / D-17 | 기준값 TODO — `group_vars/all.yml`에 표시. 값 확정 시 해당 파일만 수정 |
+| U-08 | 2026-09-13 인프라팀 재질의 회신으로 확정("root 계정 단일") — 자동판정가능 |
+| U-31,33,39~41,45,47,49~51,54,56~61,65 | 2026-09-13 인프라팀 회신으로 "미사용/N/A/확정" — 값 없이도 자동판정, `group_vars/all.yml` 참고 |
+| D-02,03,04,05,06,10,20 | 2026-09-13(D-03/05는 09-10) 인프라팀 회신으로 확정 — `group_vars/all.yml`의 `dbms_service_accounts` 등 참고 |
+| U-64 | AMI 비교 방식으로 재설계 완료, SSM 파라미터 경로도 2026-09-13 확정(인프라팀 Terraform 코드 확인) — `u64_nat_latest_ami_ssm_param`(NAT용, arm64 계열)은 kernel-default/minimal 확정이 100%는 아니라 1차 점검 시 `aws ssm get-parameter`로 실제 AMI ID와 대조 검증 권장 |
+| U-23 | SUID/SGID 화이트리스트 확정값 있음 — 단, 파일럿 실측 결과 AL2023 표준 바이너리(`at`,`chage`,`write`,`screen` 등) 일부 누락 발견돼 보정 검토 중 |
+| U-66 | 2026-09-13 확인 결과 SSM세션/sudo/DB감사로그 미구현 확정 — SKIP이 아니라 의도적으로 FAIL 처리(`u66_missing_log_categories`) |
+| D-26 | `d26_audit_log_group_name` TODO(D-17과 함께 별도 설계 예정) — 값 확정 전까지 SKIP |
 | D-07, D-10, D-14 | `dbms_connections`에 host/namespace/pod_label_selector 확정 필요(DB 구축 진행 중) |
 | 로컬 VM 파일럿 테스트 | 스펙 6절 참고 — 사용자 환경에서 진행 |

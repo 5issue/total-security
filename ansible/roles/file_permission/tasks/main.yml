@@ -319,21 +319,25 @@
   register: u28_sources_raw
   changed_when: false
   failed_when: false
-  when: "'active' in u28_firewalld_active.stdout"
+  when: (u28_firewalld_active.stdout | default('') | trim) == 'active'
 
 - name: "U-28 | 판정 기록"
   vars:
+    # ⚠ "'active' in stdout" 방식은 'inactive' 문자열에도 'active'가 부분 문자열로
+    # 포함돼 있어(in-ACTIVE) 항상 참이 되는 버그였다(로컬 VM 실측으로 확인, 2026-09-13) —
+    # 정확히 일치하는지(==)로 비교해야 한다.
+    u28_firewalld_is_active: "{{ (u28_firewalld_active.stdout | default('') | trim) == 'active' }}"
     u28_has_source_restriction: "{{ (u28_sources_raw.stdout | default('') | trim | length) > 0 }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-28', 'item': 'IP 기반 접근제어',
       'status': (
         'SKIP' if u28_allowed_ips is none else
-        ('FAIL' if ('active' not in u28_firewalld_active.stdout or not u28_has_source_restriction) else 'PASS')
+        ('FAIL' if (not u28_firewalld_is_active or not u28_has_source_restriction) else 'PASS')
       ),
       'detail': (
-        'firewalld: ' ~ u28_firewalld_active.stdout | trim ~
-        (' / source 제한: ' ~ (u28_sources_raw.stdout | default('없음', true) | trim) if 'active' in u28_firewalld_active.stdout else '') ~
+        'firewalld: ' ~ (u28_firewalld_active.stdout | trim) ~
+        (' / source 제한: ' ~ (u28_sources_raw.stdout | default('없음', true) | trim) if u28_firewalld_is_active else '') ~
         (' — 허용IP목록(u28_allowed_ips) TODO' if u28_allowed_ips is none else '')
       )
     }] }}"
@@ -378,7 +382,9 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-31 | 숨김 디렉터리 점검 [기준값필요: u31_allowed_hidden_entries]
+# U-31 | 숨김 디렉터리 점검 [N/A 확정 — 2026-09-13 인프라팀 노션 회신]
+#   EKS 관리형 워커노드는 사용자 정의 숨김파일이 없는 것이 정상(N/A). OS/도구 표준
+#   항목(u31_os_baseline_hidden_entries) 외의 것이 발견되면 FAIL로 자동판정한다.
 # -----------------------------------------------------------------------------
 - name: "U-31 | 사용자 홈 숨김 디렉터리 조회"
   ansible.builtin.shell: "set -o pipefail && for h in $(awk -F: '$3>=1000 {print $6}' /etc/passwd); do find \"$h\" -maxdepth 1 -type d -name '.*' 2>/dev/null | grep -vE '(^\\.$|/\\.\\.?$)'; done"
@@ -390,18 +396,43 @@
 
 - name: "U-31 | 판정 기록"
   vars:
-    u31_found: "{{ u31_raw.stdout_lines | default([]) }}"
-    u31_unauthorized: "{{ u31_found | difference(u31_allowed_hidden_entries | default([])) }}"
+    u31_found: "{{ u31_raw.stdout_lines | default([]) | map('basename') | list }}"
+    u31_unauthorized: "{{ u31_found | difference(u31_os_baseline_hidden_entries | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-31', 'item': '숨김 디렉터리 점검',
-      'status': (
-        'SKIP' if u31_allowed_hidden_entries is none else
-        ('PASS' if u31_unauthorized | length == 0 else 'FAIL')
-      ),
+      'status': 'FAIL' if u31_unauthorized | length > 0 else 'N/A',
       'detail': (
-        '발견된 숨김 디렉터리(화이트리스트 TODO, 참고용): ' ~ (u31_found | join(', ') if u31_found | length > 0 else '없음') if u31_allowed_hidden_entries is none
-        else '화이트리스트 밖 숨김 디렉터리: ' ~ (u31_unauthorized | join(', ') if u31_unauthorized | length > 0 else '없음')
+        'OS/도구 표준 항목 외 숨김 디렉터리 발견: ' ~ (u31_unauthorized | join(', ')) if u31_unauthorized | length > 0
+        else '사용자 정의 숨김 디렉터리 없음(OS 기본 항목만 존재) — 컨테이너 기반 인프라 특성상 정상(N/A 확정, 2026-09-13 인프라팀 확인)'
+      )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-33 | 불필요한 파일 제거 [N/A 확정 — 2026-09-13 인프라팀 노션 회신]
+#   컨테이너 기반 인프라라 애플리케이션/소스코드가 노드에 존재하지 않는 것이 정상(N/A).
+#   업무 파일 배치 경로(u33_business_file_dirs)에서 파일이 발견되면 FAIL로 자동판정한다.
+# -----------------------------------------------------------------------------
+- name: "U-33 | 업무 파일 배치 경로 조회"
+  ansible.builtin.shell: >
+    set -o pipefail &&
+    for d in {{ u33_business_file_dirs | join(' ') }}; do
+      [ -d "$d" ] && find "$d" -mindepth 1 2>/dev/null;
+    done
+  args:
+    executable: /bin/bash
+  register: u33_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-33 | 판정 기록"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-33', 'item': '불필요한 파일 제거',
+      'status': 'FAIL' if (u33_raw.stdout | default('') | length > 0) else 'N/A',
+      'detail': (
+        '업무 파일 배치 경로(' ~ (u33_business_file_dirs | join(', ')) ~ ')에서 파일 발견: ' ~ (u33_raw.stdout | truncate(200)) if (u33_raw.stdout | default('') | length > 0)
+        else '업무 파일 배치 경로 전부 비어있음 — 컨테이너 기반 인프라 특성상 정상(N/A 확정, 2026-09-13 인프라팀 확인)'
       )
     }] }}"
 
@@ -435,18 +466,6 @@
       'id': 'U-32', 'item': '홈 디렉터리 관리',
       'status': 'PASS' if (u32_raw.stdout | default('') | length == 0) else 'FAIL',
       'detail': '위반 사항: ' ~ ((u32_raw.stdout_lines | default([])) | join('; ') if u32_raw.stdout | default('') | length > 0 else '없음')
-    }] }}"
-
-# -----------------------------------------------------------------------------
-# U-33 | 불필요한 파일 제거 [기준값필요: u33_allowed_extra_paths]
-#   업무별 필요 파일 목록이 없으면 자동판정 불가 — 값 확정 전까지 SKIP 고정.
-# -----------------------------------------------------------------------------
-- name: "U-33 | 판정 기록"
-  ansible.builtin.set_fact:
-    check_results: "{{ check_results + [{
-      'id': 'U-33', 'item': '불필요한 파일 제거',
-      'status': 'SKIP',
-      'detail': '업무별 필요 파일·디렉터리 목록(u33_allowed_extra_paths) 미확정 — 자동판정 불가, 조직 확인 대기'
     }] }}"
 
 # -----------------------------------------------------------------------------

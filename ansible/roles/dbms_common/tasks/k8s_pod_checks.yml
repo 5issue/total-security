@@ -26,6 +26,16 @@
     ] }}"
   when: not k8s_pod_target_ready
 
+# D-25는 실제 DB 엔진(mysql/postgresql)에만 해당 — D-10 로컬 검증용 mock 파드(engine=
+# networkpolicy-test)는 애초에 대상이 아니므로 SKIP 행조차 만들지 않는다.
+- name: "{{ db_conn.service }} | D-25 SKIP 처리(네임스페이스·라벨셀렉터 미확정)"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [
+      {'id': 'D-25', 'item': '주기적 보안 패치 및 벤더 권고사항 적용', 'target': db_conn.service, 'status': 'SKIP',
+       'detail': 'group_vars의 dbms_connections[].namespace/pod_label_selector 미설정 — 파드 조회 불가'}
+    ] }}"
+  when: not k8s_pod_target_ready and db_conn.engine in ['mysql', 'postgresql']
+
 # -----------------------------------------------------------------------------
 # 파드 spec 조회 (쉘 진입 없음)
 # -----------------------------------------------------------------------------
@@ -51,27 +61,44 @@
     ] }}"
   when: k8s_pod_target_ready and (k8s_pods_raw.resources is not defined or k8s_pods_raw.resources | length == 0)
 
+- name: "{{ db_conn.service }} | D-25 SKIP 처리(조회된 파드 없음)"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [
+      {'id': 'D-25', 'item': '주기적 보안 패치 및 벤더 권고사항 적용', 'target': db_conn.service, 'status': 'SKIP',
+       'detail': '라벨셀렉터(' ~ db_conn.pod_label_selector ~ ')로 조회된 파드 없음 — DB 미구축 또는 라벨 불일치'}
+    ] }}"
+  when: k8s_pod_target_ready and (k8s_pods_raw.resources is not defined or k8s_pods_raw.resources | length == 0) and db_conn.engine in ['mysql', 'postgresql']
+
 # -----------------------------------------------------------------------------
 # D-07 | non-root 구동 — pod/container securityContext.runAsUser, runAsNonRoot 조회
+#   ⚠ Ansible의 vars: 템플릿은 Jinja2 값이 실제 Python None이어도 문자열로 강제 변환하는
+#   과정에서 빈 문자열('')로 뭉개버려 `| default(none)` + `is none` 조합이 항상 거짓이
+#   되는 고질적인 문제가 있다(로컬 kind 클러스터 실측으로 확인, 2026-09-13 — securityContext
+#   미설정 파드가 REVIEW 대신 FAIL로 오판정되던 버그). None 대신 절대 값으로 나올 수 없는
+#   문자열 센티널('__unset__')을 기본값으로 써서 우회한다.
 # -----------------------------------------------------------------------------
 - name: "{{ db_conn.service }} | D-07 판정 기록"
   vars:
     k8s_pod: "{{ k8s_pods_raw.resources[0] }}"
-    d07_pod_run_as_nonroot: "{{ k8s_pod.spec.securityContext.runAsNonRoot | default(none) }}"
-    d07_pod_run_as_user: "{{ k8s_pod.spec.securityContext.runAsUser | default(none) }}"
-    d07_container_run_as_user: "{{ k8s_pod.spec.containers[0].securityContext.runAsUser | default(none) }}"
+    d07_unset: "__unset__"
+    # ⚠ boolean=true(2번째 인자)를 주면 안 됨 — runAsUser=0(root, 정확히 잡아내야 할 FAIL
+    # 케이스)이나 runAsNonRoot=false 같은 "falsy이지만 실제 값"까지 미설정으로 오인해버림.
+    # 여기서는 진짜 Undefined(키 자체가 없음)일 때만 대체되도록 기본(false) 그대로 둔다.
+    d07_pod_run_as_nonroot: "{{ k8s_pod.spec.securityContext.runAsNonRoot | default(d07_unset) }}"
+    d07_pod_run_as_user: "{{ k8s_pod.spec.securityContext.runAsUser | default(d07_unset) }}"
+    d07_container_run_as_user: "{{ k8s_pod.spec.containers[0].securityContext.runAsUser | default(d07_unset) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-07', 'item': 'root 권한으로 서비스 구동 제한', 'target': db_conn.service,
       'status': (
-        'PASS' if (d07_pod_run_as_nonroot == true or (d07_pod_run_as_user is not none and d07_pod_run_as_user | int != 0) or (d07_container_run_as_user is not none and d07_container_run_as_user | int != 0))
-        else ('FAIL' if (d07_pod_run_as_user is not none and d07_pod_run_as_user | int == 0) or (d07_container_run_as_user is not none and d07_container_run_as_user | int == 0)
+        'PASS' if (d07_pod_run_as_nonroot == true or (d07_pod_run_as_user != d07_unset and d07_pod_run_as_user | int != 0) or (d07_container_run_as_user != d07_unset and d07_container_run_as_user | int != 0))
+        else ('FAIL' if (d07_pod_run_as_user != d07_unset and d07_pod_run_as_user | int == 0) or (d07_container_run_as_user != d07_unset and d07_container_run_as_user | int == 0)
               else 'REVIEW')
       ),
       'detail': 'pod.securityContext.runAsNonRoot=' ~ (d07_pod_run_as_nonroot | string) ~
                 ', runAsUser(pod)=' ~ (d07_pod_run_as_user | string) ~
                 ', runAsUser(container)=' ~ (d07_container_run_as_user | string) ~
-                (' — securityContext 미설정 시 이미지 기본 USER 지시자 수동 확인 필요' if (d07_pod_run_as_nonroot is none and d07_pod_run_as_user is none and d07_container_run_as_user is none) else '')
+                (' — securityContext 미설정 시 이미지 기본 USER 지시자 수동 확인 필요' if (d07_pod_run_as_nonroot == d07_unset and d07_pod_run_as_user == d07_unset and d07_container_run_as_user == d07_unset) else '')
     }] }}"
   when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0)
 
@@ -106,11 +133,11 @@
 
 # -----------------------------------------------------------------------------
 # D-10 | 원격 DB 서버 접속 제한 — 2026-09-09 인프라팀 확인으로 IP 허용목록이 아니라
-#   NetworkPolicy(라벨 기반 Pod 접근 제한) 방식으로 변경(spec 2.3절). 대상 파드에
-#   적용되는(podSelector가 파드 라벨의 부분집합인) NetworkPolicy를 찾아,
-#   group_vars의 d10_allowed_np_label 이:
-#     - 미확정(null) 이면 존재 여부·podSelector 제한 여부까지만 확인해 REVIEW
-#     - 확정되면 해당 라벨로 ingress를 제한하는 NetworkPolicy 존재 여부로 PASS/FAIL
+#   NetworkPolicy(라벨 기반 Pod 접근 제한) 방식으로 변경, 2026-09-13 라벨 값까지 확정
+#   (spec 2.1/2.3절). 대상 파드에 적용되는(podSelector가 파드 라벨의 부분집합인)
+#   NetworkPolicy를 찾아, 라벨 키(d10_np_label_key="app")·값({서비스이름}-service,
+#   dbms_service_accounts[].service 를 db_conn.service로 조회)으로 ingress가
+#   제한되는지 확인해 PASS/FAIL 판정한다. 매핑을 못 찾으면 REVIEW.
 # -----------------------------------------------------------------------------
 - name: "{{ db_conn.service }} | D-10 네임스페이스 내 NetworkPolicy 전체 조회"
   kubernetes.core.k8s_info:
@@ -144,25 +171,57 @@
 
 - name: "{{ db_conn.service }} | D-10 판정 기록"
   vars:
+    d10_unset: "__unset__"
+    # ⚠ Ansible vars: 템플릿이 Python None을 빈 문자열로 뭉개버리는 문제(k8s_pod_checks.yml
+    # D-07과 동일 원인, 2026-09-13 로컬 kind 클러스터 실측으로 확인) — `| default(none, true)`
+    # + `is none` 조합 대신 문자열 센티널로 우회한다.
     d10_np_with_restriction: "{{ d10_applying_np | selectattr('spec.podSelector.matchLabels', 'defined') | list }}"
     d10_allow_from_labels: "{{ d10_applying_np
                                 | map(attribute='spec.ingress') | select('defined') | list | sum(start=[])
                                 | map(attribute='from') | select('defined') | list | sum(start=[])
                                 | map(attribute='podSelector.matchLabels') | select('defined') | list }}"
-    d10_label_matched: "{{ d10_allowed_np_label is not none and ({d10_allowed_np_label.key: d10_allowed_np_label.value} in d10_allow_from_labels) }}"
+    d10_expected_value: "{{ (dbms_service_accounts | selectattr('database', 'equalto', db_conn.service) | map(attribute='service') | list | first) | default(d10_unset) }}"
+    d10_label_matched: "{{ d10_expected_value != d10_unset and ({d10_np_label_key: d10_expected_value} in d10_allow_from_labels) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-10', 'item': '원격 DB 서버 접속 제한', 'target': db_conn.service,
       'status': (
-        'REVIEW' if d10_allowed_np_label is none else ('PASS' if d10_label_matched else 'FAIL')
+        'REVIEW' if d10_expected_value == d10_unset else ('PASS' if d10_label_matched else 'FAIL')
       ),
       'detail': (
         '대상 파드에 적용되는 NetworkPolicy ' ~ (d10_applying_np | length | string) ~ '개(그중 podSelector로 대상 제한된 것 '
         ~ (d10_np_with_restriction | length | string) ~ '개)'
-        ~ (' — group_vars의 d10_allowed_np_label 확정 후 PASS/FAIL 전환 예정' if d10_allowed_np_label is none
-           else (' — 허용 라벨(' ~ d10_allowed_np_label.key ~ '=' ~ d10_allowed_np_label.value ~ ') 기준 ingress 제한 '
+        ~ (' — dbms_service_accounts에 이 DB(' ~ db_conn.service ~ ')에 매핑된 서비스명 없음, group_vars 확인 필요' if d10_expected_value == d10_unset
+           else (' — 허용 라벨(' ~ d10_np_label_key ~ '=' ~ d10_expected_value ~ ') 기준 ingress 제한 '
                  ~ (d10_label_matched | ternary('확인됨', '없음(절대기준 위반)')))
         )
       )
     }] }}"
   when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0)
+
+# -----------------------------------------------------------------------------
+# D-25 | 주기적 보안 패치 적용 [확정 — 2026-09-14 인프라팀 회신]
+#   MOCO(MySQL)/CNPG(PostgreSQL) 파드 베이스 이미지 둘 다 apt 계열(Debian/Ubuntu) 확정 —
+#   dnf 분기 불필요. `apt list --upgradable`로 미적용 보안 업데이트 0건이면 PASS.
+#   D-10 로컬 검증용 mock 파드(kind-d10-*, engine=networkpolicy-test)는 apt가 없는
+#   busybox 이미지라 대상에서 제외한다.
+# -----------------------------------------------------------------------------
+- name: "{{ db_conn.service }} | D-25 apt 업그레이드 가능 패키지 조회"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ db_conn.namespace }}"
+    pod: "{{ k8s_pods_raw.resources[0].metadata.name }}"
+    command: sh -c "apt list --upgradable 2>/dev/null | tail -n +2"
+  register: d25_raw
+  failed_when: false
+  when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0) and db_conn.engine in ['mysql', 'postgresql']
+
+- name: "{{ db_conn.service }} | D-25 판정 기록"
+  vars:
+    d25_lines: "{{ (d25_raw.stdout | default('')).split('\n') | select() | list }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'D-25', 'item': '주기적 보안 패치 및 벤더 권고사항 적용', 'target': db_conn.service,
+      'status': 'PASS' if d25_lines | length == 0 else 'FAIL',
+      'detail': '미적용 보안 업데이트 ' ~ (d25_lines | length | string) ~ '건' ~ (': ' ~ (d25_lines | join(', ') | truncate(150)) if d25_lines | length > 0 else '')
+    }] }}"
+  when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0) and db_conn.engine in ['mysql', 'postgresql']

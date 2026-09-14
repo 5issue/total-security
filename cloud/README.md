@@ -51,9 +51,9 @@ python3 cloud_check.py --round "1차" --eks-clusters my-cluster-1,my-cluster-2
 
 | 항목 | 이유 |
 |---|---|
-| 1.1(관리자 화이트리스트), 1.2(계정-담당자 매핑) | 확인요청 표 14/15번 — `config.py`에 TODO, 값 확정 전까지 SKIP |
-| 1.4, 1.6, 1.11 | 그룹 화이트리스트/Key Pair 보관위치/EKS 접근 화이트리스트 TODO |
-| 2.1~2.3 | 서비스별 IAM 최소권한 정의서 — BE팀 API 명세서 기반 매핑 진행 중 |
-| 3.2, 3.6 | 보안그룹 필요규칙·NAT 목적확인 리소스 목록 TODO(3.6은 source/dest check 여부만 자동판정) |
+| 1.1, 1.2, 1.4, 1.6, 1.11 | 2026-09-13 인프라팀 노션 회신으로 화이트리스트 확정 — `config.py` 참고, 자동판정 전환 완료 |
+| 2.1, 2.2 | 인스턴스/네트워크 서비스 IAM 최소권한 정의서 — 인프라팀 직접 질의 발송, 답변 대기 |
+| 2.3(KMS/S3/SecretManager) | 2026-09-11 baseline 확보(spec 3.1.1절) — 아직 코드 미반영, 별도 세션 필요 |
+| 3.2, 3.6 | 2026-09-13 인프라팀 노션 회신으로 SG 규칙·NAT 목적 리소스 확정 — `config.py` 참고, 자동판정 전환 완료 |
 | 3.10 Idle Timeout | BE(Payment)-인프라팀 협의 중(나머지 7개 항목은 자동판정) |
 | 1.8 | AWS Config Rule(`access-keys-rotated`)이 대상 계정에 배포돼 있어야 정상 판정 |

@@ -7,8 +7,19 @@
 [server_targets]
 ; worker-node-1 ansible_host=i-xxxxxxxxxxxxxxxxx
 ; worker-node-2 ansible_host=i-yyyyyyyyyyyyyyyyy
-; nat-instance-a ansible_host=i-zzzzzzzzzzzzzzzzz
-; nat-instance-c ansible_host=i-wwwwwwwwwwwwwwwww
+; eks-nat-instance-2a ansible_host=i-zzzzzzzzzzzzzzzzz
+; eks-nat-instance-2c ansible_host=i-wwwwwwwwwwwwwwwww
+
+# U-64(패치 최신성)가 워커노드/NAT 인스턴스별로 다른 AMI 기준(EKS 최적화 AMI vs 표준
+# AL2023 AMI)을 비교하기 위해 참조하는 그룹 — 2026-09-13 인프라팀 확인, 실제 인스턴스
+# ID 확정 후 아래 그룹에도 정확히 배정할 것.
+[eks_worker_nodes]
+; worker-node-1
+; worker-node-2
+
+[nat_instances]
+; eks-nat-instance-2a
+; eks-nat-instance-2c
 
 [server_targets:vars]
 ansible_connection=aws_ssm

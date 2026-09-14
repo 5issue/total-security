@@ -52,12 +52,24 @@ def check_1_2_iam_single_account(iam):
         return [make_result("1.2", "IAM 사용자 계정 단일화 관리", "SKIP",
                              "계정-담당자 매핑표(config.IAM_ACCOUNT_OWNER_MAP) 미확정 — "
                              f"전체 IAM 사용자(참고용): {', '.join(names) if names else '없음'}")]
+    # 1인 다중 계정 보유 검사(공용 배포 계정 등 명시적 예외는 제외)
+    exceptions = set(config.IAM_SHARED_ACCOUNT_EXCEPTIONS or [])
     owner_counts = {}
-    for owner in config.IAM_ACCOUNT_OWNER_MAP.values():
+    for user_name, owner in config.IAM_ACCOUNT_OWNER_MAP.items():
+        if user_name in exceptions:
+            continue
         owner_counts[owner] = owner_counts.get(owner, 0) + 1
     dup_owners = {owner: cnt for owner, cnt in owner_counts.items() if cnt > 1}
-    status = "PASS" if not dup_owners else "FAIL"
-    detail = "1인 다중 계정 보유자: " + (str(dup_owners) if dup_owners else "없음")
+
+    # 매핑표에 없는 신규/미상 IAM 사용자 검사(2026-09-13 인프라팀 확인)
+    users, err = safe_call(iam.list_users)
+    unmapped = []
+    if not err:
+        unmapped = [u["UserName"] for u in users["Users"] if u["UserName"] not in config.IAM_ACCOUNT_OWNER_MAP]
+
+    status = "PASS" if not dup_owners and not unmapped else "FAIL"
+    detail = ("1인 다중 계정 보유자: " + (str(dup_owners) if dup_owners else "없음")
+              + " / 매핑표 외 신규·미상 계정: " + (", ".join(unmapped) if unmapped else "없음"))
     return [make_result("1.2", "IAM 사용자 계정 단일화 관리", status, detail)]
 
 
@@ -110,8 +122,21 @@ def check_1_5_keypair_access(ec2):
     return [make_result("1.5", "Key Pair 접근 관리", status, detail)]
 
 
-def check_1_6_keypair_storage():
-    return [make_result("1.6", "Key Pair 보관 관리", "SKIP", config.KEY_PAIR_STORAGE_CHECK_NOTE)]
+def check_1_6_keypair_storage(ec2):
+    # [확정 — 2026-09-13 인프라팀 노션 회신] EC2 Key Pair 자체 미사용(SSM 접속) 확정 —
+    # Key Pair 보관 위치 점검 대상 자체가 없는 게 정상(N/A). 1.5와 동일한 조회 재사용.
+    reservations, err = safe_call(ec2.describe_instances)
+    if err:
+        return [make_result("1.6", "Key Pair 보관 관리", "SKIP", f"EC2 인스턴스 조회 실패: {err}")]
+    with_keypair = []
+    for res in reservations["Reservations"]:
+        for inst in res["Instances"]:
+            if inst.get("KeyName"):
+                with_keypair.append(f"{inst['InstanceId']}({inst['KeyName']})")
+    status = "FAIL" if with_keypair else "N/A"
+    detail = ("Key Pair 사용 인스턴스 발견(예외 상황, 보관위치 수동 확인 필요): " + ", ".join(with_keypair)
+              if with_keypair else "EC2 Key Pair 미사용 확정(SSM 접속) — 점검 대상 자체 없음")
+    return [make_result("1.6", "Key Pair 보관 관리", status, detail)]
 
 
 def check_1_7_admin_console_policy(iam):
@@ -187,22 +212,17 @@ def check_1_10_password_policy(iam):
     return [make_result("1.10", "AWS 계정 패스워드 정책 관리", status, str(p))]
 
 
-def check_1_11_eks_user_management():
-    return [make_result("1.11", "EKS 사용자 관리", "SKIP",
-                         "인가된 EKS 접근 사용자 화이트리스트(config.EKS_ACCESS_WHITELIST) 미확정")]
-
-
-def check_2_x_service_policies():
+def check_2_3_service_policies():
+    # 2.1(인스턴스 서비스)·2.2(네트워크 서비스)는 2026-09-13 확정되어 eks_checks.py로
+    # 이전됨(EKS 노드그룹/NAT 역할 정책 대조, ALB IRSA 대조 — 별도 K8s/EKS API 접근 필요).
+    # 2.3(기타 서비스 KMS/S3/SecretManager)은 2026-09-11 baseline 확보됐으나 IAM
+    # 역할-서비스 매핑 규칙이 아직 미정이라 이 자리는 SERVICE_IAM_POLICY_MAP TODO로 유지.
     if config.SERVICE_IAM_POLICY_MAP is not None:
         status, detail = "REVIEW", "서비스별 IAM 정책 매핑 존재 — 실제 IAM 정책과 대조 필요"
     else:
         status = "SKIP"
-        detail = "서비스 역할별 필요권한 정의서(config.SERVICE_IAM_POLICY_MAP) 미확정 — API 명세서 기반 매핑 진행 중"
-    return [
-        make_result("2.1", "인스턴스 서비스 정책 관리", status, detail),
-        make_result("2.2", "네트워크 서비스 정책 관리", status, detail),
-        make_result("2.3", "기타 서비스 정책 관리", status, detail),
-    ]
+        detail = "서비스 역할별 필요권한 정의서(config.SERVICE_IAM_POLICY_MAP) 미확정"
+    return [make_result("2.3", "기타 서비스 정책 관리", status, detail)]
 
 
 def run_all(iam, ec2, configservice):
@@ -212,11 +232,10 @@ def run_all(iam, ec2, configservice):
     results += check_1_3_user_identity_tags(iam)
     results += check_1_4_group_membership(iam)
     results += check_1_5_keypair_access(ec2)
-    results += check_1_6_keypair_storage()
+    results += check_1_6_keypair_storage(ec2)
     results += check_1_7_admin_console_policy(iam)
     results += check_1_8_access_key_lifecycle(configservice)
     results += check_1_9_mfa(iam)
     results += check_1_10_password_policy(iam)
-    results += check_1_11_eks_user_management()
-    results += check_2_x_service_policies()
+    results += check_2_3_service_policies()
     return results

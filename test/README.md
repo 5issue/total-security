@@ -15,11 +15,12 @@
 ```
 
 **D-10(원격 DB 서버 접속 제한)** 은 2026-09-09 인프라팀 확인으로 IP 허용목록이 아니라
-K8s NetworkPolicy(라벨 기반 Pod 접근 제한) 방식으로 바뀌었다(spec 2.3절). VM3(DBMS) 설계는
-그대로 두고(D-01/08/09/11/18/21은 계속 VM3의 MySQL/PostgreSQL로 검증), D-10만 control VM
-안의 kind 클러스터로 검증한다(spec 6.6절). 라벨 값이 아직 미확정(`d10_allowed_np_label: null`)
-이라 운영 판정은 REVIEW로 나가고, 로컬 테스트에서는 `test_values.yml`의 임의 라벨로
-PASS/FAIL 분기까지 확인한다.
+K8s NetworkPolicy(라벨 기반 Pod 접근 제한) 방식으로 바뀌었고, 2026-09-13 라벨 값까지
+확정됐다(`app={서비스이름}-service`, spec 2.1/2.3절). VM3(DBMS) 설계는 그대로 두고
+(D-01/08/09/11/18/21은 계속 VM3의 MySQL/PostgreSQL로 검증), D-10만 control VM 안의
+kind 클러스터로 검증한다(spec 6.6절). 라벨 값이 확정되어 운영 판정도 PASS/FAIL로 바로
+나가며, `test_values.yml`의 `dbms_service_accounts` override로 로컬 테스트에서도
+동일하게 PASS/FAIL 분기를 확인한다.
 
 ## 0. 공유 SSH 키 생성 (최초 1회, `.ssh/`는 gitignore 대상이라 저장소에 없음)
 
@@ -39,7 +40,7 @@ vagrant up          # 최초 실행 시 box 다운로드 포함 5~15분 정도 �
 - `server`: `/etc/ssh/sshd_config`에 `PermitRootLogin yes` 강제 설정(U-01 FAIL), `games` 계정을 로그인 가능한 shell로 생성(U-07 FAIL)
 - `dbms`: MySQL 8.0 + PostgreSQL 15 설치. MySQL `root@localhost`는 기본값(잠금 해제 상태) 그대로 둬서 D-01 FAIL, PostgreSQL `testdb.accounts` 테이블에 `GRANT ... TO PUBLIC` 실행해서 D-18 FAIL
 - `control` 추가 프로비저닝(`kind_setup.sh`): Docker + kubectl + kind 설치, `infracheck` 클러스터 생성,
-  `k8s/namespace.yaml`·`pods.yaml`·`networkpolicies.yaml` 적용 — `mock-db-pass`(PASS 케이스, role=db-client
+  `k8s/namespace.yaml`·`pods.yaml`·`networkpolicies.yaml` 적용 — `mock-db-pass`(PASS 케이스, app=mock-db-pass-service
   라벨에서만 ingress 허용) / `mock-db-fail`(FAIL 케이스, NetworkPolicy 자체 미존재 = 무제한 허용)
 
 ## 2. 서버·DBMS 점검 실행
@@ -57,8 +58,8 @@ ansible-playbook -i /infra-check/test/inventory/hosts.ini site_check.yml \
 - `vm2-server_*.json` 안에서 U-01, U-07이 `FAIL`인지
 - `dbms_*.json` 안에서 vm3-mysql의 D-01, vm3-postgresql의 D-18이 `FAIL`인지
 - `dbms_*.json` 안에서 kind-d10-pass-case의 D-10이 `PASS`, kind-d10-fail-case의 D-10이 `FAIL`인지
-  (`test_values.yml`의 `d10_allowed_np_label` 덕분에 REVIEW가 아니라 실제 PASS/FAIL로 나와야 함 — 라벨이
-  `all.yml`처럼 `null`이면 두 케이스 모두 REVIEW로 나오는 게 정상)
+  (`test_values.yml`의 `dbms_service_accounts` 매핑 덕분에 REVIEW가 아니라 실제 PASS/FAIL로 나와야 함 —
+  이 매핑이 없으면 두 케이스 모두 REVIEW로 나오는 게 정상)
 - 나머지 값 채워진 항목(U-08, D-02~06 등)이 REVIEW로 흐려지지 않고 PASS/FAIL로 정확히 나오는지
 
 xlsx로 변환하려면 이어서:
@@ -130,4 +131,5 @@ test/
 ```
 
 `ansible/group_vars/test_values.yml`에 이 VM 3대 테스트용 `dbms_connections`, `mysql_login_*`,
-`pg_login_*`, `d10_allowed_np_label`을 추가해뒀다(실제 값 아님, all.yml에는 반영 금지 — 파일 상단 경고 참고).
+`pg_login_*`, `dbms_service_accounts`(D-02/04/06/10 매핑용)를 추가해뒀다(실제 값 아님, all.yml에는
+반영 금지 — 파일 상단 경고 참고).

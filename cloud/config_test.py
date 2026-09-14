@@ -15,6 +15,7 @@ IAM_ACCOUNT_OWNER_MAP = {
     "test-dev1": "person-b",
     "test-dev2": "person-b",   # 의도적 중복 — 1인 다중계정 FAIL 케이스 검증용
 }
+IAM_SHARED_ACCOUNT_EXCEPTIONS = []
 
 # 3.10⑤ — 테스트 ELB Idle Timeout 기준(초)
 ELB_IDLE_TIMEOUT_SECONDS = 120
@@ -33,11 +34,15 @@ SERVICE_IAM_POLICY_MAP = {
     "order-service": ["dynamodb:*", "sqs:*"],
 }
 
-# 3.2 — 테스트 보안그룹 허용 규칙 예시
-SG_ALLOWED_RULES_WHITELIST = ["sg-test-allow-1"]
+# 3.2 — 테스트 보안그룹 허용 인바운드 대역 예시
+SG_ALLOWED_INBOUND_CIDR = "10.0.0.0/16"
 
 # 3.6 — 테스트 NAT 목적 확인 리소스 예시
-NAT_PURPOSE_CONFIRMED_RESOURCES = ["i-testnat01"]
+NAT_PURPOSE_CONFIRMED_RESOURCES = {
+    "nat_instance_names": ["test-nat-instance"],
+    "nat_public_subnet_cidrs": ["10.0.1.0/24"],
+    "allowed_private_subnet_cidrs": ["10.0.16.0/20"],
+}
 
 # EKS 클러스터 이름(테스트 계정에 실제 클러스터 없으면 빈 리스트 유지 — 자동탐색으로 대체됨)
 EKS_CLUSTER_NAMES = []

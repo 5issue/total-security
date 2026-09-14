@@ -8,8 +8,6 @@
 
 u08_root_group_admin_whitelist: ["ec2-user"]
 u28_allowed_ips: ["10.0.0.0/16"]
-u31_allowed_hidden_entries: [".ssh", ".cache"]
-u33_allowed_extra_paths: ["/opt/app"]
 u40_nfs_allowed_hosts: ["10.0.0.0/16"]
 u45_mail_latest_version: "3.14"
 u47_relay_allowed_list: ["10.0.0.0/16"]
@@ -20,28 +18,53 @@ u56_ftp_allowed_hosts: ["10.0.0.0/16"]
 u61_snmp_allowed_hosts: ["10.0.0.0/16"]
 u65_ntp_allowed_servers: ["169.254.169.123"]
 u26_dev_baseline_snapshot: []   # 파일럿 VM에서 `ls /dev` 실행 후 채우는 것을 권장(테스트 시엔 빈 값 유지 가능)
+# u31/u33 — 2026-09-13부로 N/A 확정(화이트리스트 개념 자체가 없어짐), 실제 값은
+# all.yml의 u31_os_baseline_hidden_entries/u33_business_file_dirs 확정값을 그대로 사용.
 
 d02_unnecessary_account_whitelist: []
 d03_password_max_days: 90
 d03_password_min_length: 10
-d04_admin_account_whitelist: ["root", "postgres"]
+d04_admin_account_whitelist: []
 d05_applicable: true
 d05_password_reuse_limit: 5
-d06_shared_account_name_patterns: ["test", "temp", "guest", "common"]
 d20_admin_owner_whitelist: ["postgres"]
+# d06 — 2026-09-13부로 dbms_service_accounts 매핑 기반으로 재설계됨(regex 패턴 방식 폐기),
+# 아래 dbms_service_accounts 테스트 override 참고.
 
-# U-64/U-66/D-26 — 2026-09-10 재분류(제외→자동판정가능(부분)) 로직 검증용 테스트값.
-# ⚠ u64는 실제 EC2+SSM Patch Manager 대상이 아니면 AWS CLI 조회가 실패해도 정상(SKIP성 처리 확인용).
-# u66/d26 로그그룹은 실제로 존재하지 않아도 "로그그룹 없음→FAIL" 분기가 타는지 확인하는 용도.
-u64_ssm_patch_manager_confirmed: true
+# U-66/D-26 — 2026-09-10 재분류(제외→자동판정가능(부분)) 로직 검증용 테스트값.
+# u66는 2026-09-13부로 기본값이 "미구현 확정 → 즉시 FAIL"이라, 로컬 테스트에서 실제
+# CloudWatch 로그그룹 조회 분기("로그그룹 없음→FAIL")를 확인하려면 missing_log_categories를
+# 비워서 log_retention_check.yml 경로를 타도록 해야 한다.
+u66_missing_log_categories: []
 u66_log_group_name: "/test/infracheck/sudo-session"
 d26_audit_log_group_name: "/test/infracheck/dbms-audit"
 
-# D-10 (NetworkPolicy 라벨) — test/k8s kind 클러스터 로컬 테스트 전용 임의값.
-# test/k8s/networkpolicies.yaml 의 PASS 케이스 NetworkPolicy가 허용하는 ingress from 라벨과 일치해야 함.
-d10_allowed_np_label:
-  key: role
-  value: db-client
+# U-64 — 2026-09-13부로 all.yml에 실제 확정값이 들어가서 여기 별도 override 불필요(제거함).
+# ⚠ 로컬 Vagrant VM은 실제 EC2가 아니라 ec2_metadata_facts 조회 자체가 실패하므로
+# (ignore_errors) all.yml 값이 있어도 SKIP이 나오는 게 정상 — AWS 쪽 조회 실패가 아니라
+# "현재 AMI를 특정할 수 없음" 분기 확인용.
+
+# D-02/04/06/10 (서비스별 DB 계정/NetworkPolicy 라벨 매핑) — 로컬 VM/kind 테스트 전용 override.
+# database 필드가 아래 dbms_connections[].service 값과 일치해야 D-06/D-10 판정 태스크가
+# 정상적으로 기대 계정·라벨을 찾는다. service 필드(라벨 값)는 test/k8s/networkpolicies.yaml
+# 의 PASS 케이스 ingress 라벨(app=mock-db-pass-service)과 일치시켜둠.
+dbms_service_accounts:
+  - service: vm3-mysql-service
+    engine: mysql
+    database: vm3-mysql
+    account: member_service
+  - service: vm3-postgresql-service
+    engine: postgresql
+    database: vm3-postgresql
+    account: product_service
+  - service: mock-db-pass-service
+    engine: networkpolicy-test
+    database: kind-d10-pass-case
+    account: null
+  - service: mock-db-fail-service
+    engine: networkpolicy-test
+    database: kind-d10-fail-case
+    account: null
 
 # -----------------------------------------------------------------------------
 # 로컬 Vagrant 테스트(VM3=dbms) 접속 정보 — test/Vagrantfile, test/provision/dbms_target.sh 참고

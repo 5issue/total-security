@@ -1,53 +1,77 @@
 ---
 # =============================================================================
-# roles/log_patch_check — U-64(주기적 보안 패치) 점검
-#   2026-09-10 재분류(제외 → 자동판정가능(부분), spec 2.2절). SSM Patch Manager 사용을
-#   전제로 인스턴스별 패치 준수 상태를 조회한다. 대상 인스턴스(server_targets)마다 실행됨.
-#   ⚠ AWS API 호출이라 대상 호스트가 아니라 mgmt 서버(controller)에서 AWS CLI로 조회한다
-#     (delegate_to: localhost) — mgmt 서버에 이미 AWS CLI 자격증명이 구성되어 있음(spec 1절).
-#   전제조건(u64_ssm_patch_manager_confirmed)이 null/false면 AWS 호출 자체를 하지 않고 SKIP.
+# roles/log_patch_check — U-64(주기적 보안 패치), U-66(시스템 로깅) 점검
+#   U-64: [2026-09-13 인프라팀 노션 회신] SSM Patch Manager 미사용 확정 — "최신 EKS 최적화
+#   AMI 교체 + OS dnf 수동 패치" 방식으로 재설계. 대상 인스턴스(server_targets)마다 실행됨.
+#   ⚠ AMI 최신본 조회는 AWS API 호출이라 대상 호스트가 아니라 mgmt 서버(controller)에서
+#     AWS CLI로 조회한다(delegate_to: localhost) — mgmt 서버에 이미 AWS CLI 자격증명이
+#     구성되어 있음(spec 1절). 워커노드/NAT 인스턴스별로 비교 대상 AMI 계열이 다르므로
+#     인벤토리 그룹(eks_worker_nodes / nat_instances)으로 구분한다.
+#   SSM 파라미터 경로(u64_eks_optimized_ami_ssm_param / u64_nat_latest_ami_ssm_param)가
+#   null이면 SKIP(여전히 TODO — inventory/hosts.ini.example 참고).
+#   ⚠ Ansible의 set_fact/vars: 템플릿은 결과가 Python None이어도 빈 문자열('')로 뭉개버리는
+#   문제가 있어(로컬 kind 클러스터 실측으로 확인, 2026-09-13 — k8s_pod_checks.yml D-07/D-10과
+#   동일 원인) `u64_target_ami_param is none` 체크가 항상 거짓이 되어 미확정 상태에서도
+#   SKIP 게이트가 안 걸리고 빈 파라미터로 AWS CLI를 호출해버린다. None이든 ''든 둘 다
+#   falsy이므로 `is none` 대신 진위값(truthiness)으로 우회한다.
 # =============================================================================
 
-- name: "U-64 | 전제조건 미확정 시 SKIP"
+- name: "U-64 | 호스트 그룹별 비교 대상 AMI SSM 파라미터 결정"
+  ansible.builtin.set_fact:
+    u64_target_ami_param: "{{
+      u64_eks_optimized_ami_ssm_param if 'eks_worker_nodes' in group_names
+      else (u64_nat_latest_ami_ssm_param if 'nat_instances' in group_names else none)
+    }}"
+
+- name: "U-64 | 비교 대상 SSM 파라미터 미확정/미분류 시 SKIP"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-64', 'item': '주기적 보안 패치 및 벤더 권고사항 적용', 'target': inventory_hostname,
       'status': 'SKIP',
-      'detail': '패치관리 도구가 SSM Patch Manager인지 미확정(확인요청 표 18번 회신 대기) — u64_ssm_patch_manager_confirmed'
+      'detail': (
+        '인벤토리 그룹(eks_worker_nodes/nat_instances) 미분류 — inventory/hosts.ini 확인 필요' if ('eks_worker_nodes' not in group_names and 'nat_instances' not in group_names)
+        else '최신 AMI 기준 SSM 파라미터 경로 미확정(u64_eks_optimized_ami_ssm_param/u64_nat_latest_ami_ssm_param) — 인프라팀 확인 대기'
+      )
     }] }}"
-  when: not (u64_ssm_patch_manager_confirmed | default(false) | bool)
+  when: not u64_target_ami_param
 
-- name: "U-64 | 대상 인스턴스 EC2 메타데이터 조회"
+- name: "U-64 | 대상 인스턴스 EC2 메타데이터 조회(현재 AMI ID)"
   amazon.aws.ec2_metadata_facts:
   ignore_errors: true
-  when: u64_ssm_patch_manager_confirmed | default(false) | bool
+  when: u64_target_ami_param | default('') | length > 0
 
-- name: "U-64 | SSM 패치 상태 조회(mgmt 서버 AWS CLI)"
+- name: "U-64 | 최신 AMI ID 조회(mgmt 서버 AWS CLI)"
   ansible.builtin.command:
-    cmd: "aws ssm describe-instance-patch-states --instance-ids {{ ansible_ec2_instance_id }} --output json"
-  register: u64_patch_raw
+    cmd: "aws ssm get-parameter --name {{ u64_target_ami_param }} --query Parameter.Value --output text"
+  register: u64_latest_ami_raw
   delegate_to: localhost
   failed_when: false
-  when: u64_ssm_patch_manager_confirmed | default(false) | bool and ansible_ec2_instance_id is defined
+  when: u64_target_ami_param | default('') | length > 0
+
+- name: "U-64 | dnf 패치 이력 조회(참고용, 판정 미반영)"
+  ansible.builtin.command: "dnf history list"
+  register: u64_dnf_raw
+  become: true
+  changed_when: false
+  failed_when: false
+  when: u64_target_ami_param | default('') | length > 0
 
 - name: "U-64 | 판정 기록"
   vars:
-    u64_ok: "{{ u64_patch_raw is defined and (u64_patch_raw.rc | default(-1)) == 0 }}"
-    u64_parsed: "{{ (u64_patch_raw.stdout | from_json) if u64_ok else {} }}"
-    u64_states: "{{ u64_parsed.InstancePatchStates | default([]) }}"
-    u64_state: "{{ u64_states[0] if u64_states | length > 0 else {} }}"
-    u64_missing: "{{ u64_state.MissingCount | default(0) }}"
-    u64_failed: "{{ u64_state.FailedCount | default(0) }}"
+    u64_current_ami: "{{ ansible_ec2_ami_id | default('') }}"
+    u64_latest_ami: "{{ (u64_latest_ami_raw.stdout | default('') | trim) if (u64_latest_ami_raw is defined and (u64_latest_ami_raw.rc | default(-1)) == 0) else '' }}"
+    u64_lookup_ok: "{{ u64_current_ami | length > 0 and u64_latest_ami | length > 0 }}"
+    u64_dnf_recent: "{{ (u64_dnf_raw.stdout_lines | default([]))[1:4] | join(' / ') if u64_dnf_raw is defined and u64_dnf_raw.stdout_lines | default([]) | length > 1 else '조회 실패 또는 이력 없음' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-64', 'item': '주기적 보안 패치 및 벤더 권고사항 적용', 'target': inventory_hostname,
       'status': (
-        'SKIP' if not u64_ok or (u64_states | length == 0)
-        else ('PASS' if (u64_missing | int == 0 and u64_failed | int == 0) else 'FAIL')
+        'SKIP' if not u64_lookup_ok
+        else ('PASS' if u64_current_ami == u64_latest_ami else 'FAIL')
       ),
       'detail': (
-        'SSM 패치 상태 조회 실패 또는 SSM Patch Manager 미등록 인스턴스(instance_id=' ~ (ansible_ec2_instance_id | default('미확인')) ~ ')' if not u64_ok or (u64_states | length == 0)
-        else 'MissingCount=' ~ u64_missing ~ ', FailedCount=' ~ u64_failed ~ ' (PatchGroup=' ~ (u64_state.PatchGroup | default('없음')) ~ ')'
+        '현재 AMI(' ~ (u64_current_ami | default('미확인')) ~ ') 또는 최신 AMI 조회 실패(SSM 파라미터=' ~ u64_target_ami_param ~ ')' if not u64_lookup_ok
+        else '현재 AMI=' ~ u64_current_ami ~ ', 최신 AMI=' ~ u64_latest_ami ~ ' / 최근 dnf 이력: ' ~ u64_dnf_recent
       )
     }] }}"
-  when: u64_ssm_patch_manager_confirmed | default(false) | bool
+  when: u64_target_ami_param | default('') | length > 0
