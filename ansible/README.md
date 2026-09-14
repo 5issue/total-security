@@ -7,11 +7,11 @@
 
 | Role | 대상 항목 | 비고 |
 |---|---|---|
-| `roles/account_auth` | U-01~13, U-63 (+U-08 SKIP) | 계정·인증 |
-| `roles/file_permission` | U-14~30 계열(U-23,26 포함) | 파일·디렉터리 권한 |
+| `roles/account_auth` | U-01~13, U-63 | 계정·인증 |
+| `roles/file_permission` | U-14~30 계열(U-23,26 포함, U-26은 아직 TODO — 아래 표 참고) | 파일·디렉터리 권한 |
 | `roles/network_service` | U-34~61 계열(U-37,42 포함) | 서비스 활성화 여부 |
 | `roles/log_patch_check` | U-64(패치), U-66(로깅) | mgmt 서버 AWS CLI 조회(SSM/CloudWatch) — 2026-09-10 재분류(제외→자동판정가능(부분)) |
-| `roles/dbms_common` | D-01~26 중 코드화 대상 18개 | mysql.yml/postgresql.yml(SQL) + k8s_pod_checks.yml(D-07,10,14 파드/K8s) + log_patch_check 재사용(D-26) |
+| `roles/dbms_common` | D-01~26 중 코드화 대상 18개 | mysql.yml/postgresql.yml(SQL) + k8s_pod_checks.yml(D-07,10,14,25 파드/K8s) + log_patch_check 재사용(D-26) |
 
 판정유형이 "제외"로 확정된 항목(U-62 / D-12,13,15,16,19,22,23,24)은 role에
 코드로 작성하지 않고, `scripts/build_server_dbms_xlsx.py`가 N/A 고정 행으로 삽입한다.

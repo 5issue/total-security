@@ -7,12 +7,12 @@ AWS CLI/boto3 read-only API로 클라우드 시트(1.x~4.x, 41개 항목)를 점
 
 | 모듈 | 대상 항목 | 비고 |
 |---|---|---|
-| `checks/iam_checks.py` | 1.1~1.11, 2.1~2.3 | IAM 사용자·그룹·Access Key·MFA·패스워드 정책, 서비스별 IAM 최소권한 |
+| `checks/iam_checks.py` | 1.1~1.10, 2.3 | IAM 사용자·그룹·Access Key·MFA·패스워드 정책, 기타 서비스(KMS/S3/SecretManager) IAM 정책 |
 | `checks/network_checks.py` | 3.1~3.6 | 보안그룹·NACL·라우팅테이블·IGW·NAT |
 | `checks/storage_checks.py` | 3.7~3.8, 4.1~4.3, 4.9~4.10 | S3/EBS/RDS 접근·암호화 |
 | `checks/logging_checks.py` | 4.4~4.8, 4.11~4.12 | 통신구간·CloudTrail·CloudWatch·VPC 플로우로그, 보관기간 |
 | `checks/elb_checks.py` | 3.10 | ALB 제어정책(리스너/SSL Policy/액세스로그/Deletion Protection/헬스체크/보안그룹/Cross-Zone) |
-| `checks/eks_checks.py` | 1.12~1.13, 3.9, 4.14~4.15 | boto3 + kubernetes 파이썬 클라이언트(kubeconfig 필요) |
+| `checks/eks_checks.py` | 1.11~1.13, 2.1~2.2, 3.9, 4.14~4.15 | boto3 + kubernetes 파이썬 클라이언트(kubeconfig 필요). 인스턴스/네트워크 서비스 IAM 최소권한(2.1/2.2)이 EKS 노드그룹·ALB IRSA 대조라 이 파일로 옮겨와 있음 — 2.2는 VPC CNI IRSA 미분리가 구조적으로 확정된 사실이라 항상 REVIEW 이상(PASS 없음) |
 
 판정유형이 "제외"로 확정된 항목(4.13 백업)은 코드로 작성하지 않고 `cloud_check.py`가
 N/A 고정 행으로 삽입한다.
@@ -49,11 +49,11 @@ python3 cloud_check.py --round "1차" --eks-clusters my-cluster-1,my-cluster-2
 
 ## 아직 미착수 / 보류 (실제 계정 연동 후 확인 필요)
 
+2026-09-13 인프라팀 대량 회신으로 1.1,1.2,1.4,1.6,1.11 / 2.1,2.2 / 3.2,3.6 / 3.10(Idle
+Timeout) 는 전부 확정·자동판정 전환 완료됐다(해결된 항목은 이 표에서 제외). 아래는
+2026-09-14 기준 여전히 열려있는 항목만 남긴다.
+
 | 항목 | 이유 |
 |---|---|
-| 1.1, 1.2, 1.4, 1.6, 1.11 | 2026-09-13 인프라팀 노션 회신으로 화이트리스트 확정 — `config.py` 참고, 자동판정 전환 완료 |
-| 2.1, 2.2 | 인스턴스/네트워크 서비스 IAM 최소권한 정의서 — 인프라팀 직접 질의 발송, 답변 대기 |
-| 2.3(KMS/S3/SecretManager) | 2026-09-11 baseline 확보(spec 3.1.1절) — 아직 코드 미반영, 별도 세션 필요 |
-| 3.2, 3.6 | 2026-09-13 인프라팀 노션 회신으로 SG 규칙·NAT 목적 리소스 확정 — `config.py` 참고, 자동판정 전환 완료 |
-| 3.10 Idle Timeout | BE(Payment)-인프라팀 협의 중(나머지 7개 항목은 자동판정) |
+| 2.3(KMS/S3/SecretManager) | `config.SERVICE_IAM_POLICY_MAP` 아직 TODO(None) — 서비스 역할별 필요권한 정의서 확정 시 값만 채우면 됨(로직은 이미 작성됨, 값 없으면 자동 SKIP) |
 | 1.8 | AWS Config Rule(`access-keys-rotated`)이 대상 계정에 배포돼 있어야 정상 판정 |
