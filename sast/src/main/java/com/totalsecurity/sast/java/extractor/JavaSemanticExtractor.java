@@ -34,6 +34,7 @@ import com.totalsecurity.sast.ir.statement.IfStatement;
 import com.totalsecurity.sast.ir.statement.ReturnStatement;
 import com.totalsecurity.sast.ir.statement.Statement;
 import com.totalsecurity.sast.ir.statement.SwitchCase;
+import com.totalsecurity.sast.ir.statement.SwitchCaseKind;
 import com.totalsecurity.sast.ir.statement.SwitchStatement;
 import com.totalsecurity.sast.ir.statement.ThrowStatement;
 import com.totalsecurity.sast.ir.statement.UnknownStatement;
@@ -275,6 +276,9 @@ public final class JavaSemanticExtractor {
     }
 
     private SwitchCase extractSwitchCase(TSNode group) {
+        SwitchCaseKind kind = group.getType().equals("switch_rule")
+                ? SwitchCaseKind.ARROW_RULE
+                : SwitchCaseKind.STATEMENT_GROUP;
         List<Expression> labels = new ArrayList<>();
         List<Statement> statements = new ArrayList<>();
         boolean defaultCase = false;
@@ -293,7 +297,7 @@ public final class JavaSemanticExtractor {
                 statements.add(new ExpressionStatement(extractExpression(child), location(child)));
             }
         }
-        return new SwitchCase(labels, defaultCase, statements, location(group));
+        return new SwitchCase(kind, labels, defaultCase, statements, location(group));
     }
 
     private boolean isStatementNode(TSNode node) {
