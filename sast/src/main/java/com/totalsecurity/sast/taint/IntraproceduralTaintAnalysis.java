@@ -500,6 +500,8 @@ public final class IntraproceduralTaintAnalysis {
         private TaintAnalysisResult toResult() {
             LinkedHashMap<Definition, TaintTraceStep> definitionStepCopy = new LinkedHashMap<>();
             definitionSteps.forEach(definitionStepCopy::put);
+            IdentityHashMap<Expression, TaintTraceStep> expressionStepCopy = new IdentityHashMap<>();
+            expressionSteps.forEach(expressionStepCopy::put);
             return new TaintAnalysisResult(
                     dataFlow,
                     seeds,
@@ -512,6 +514,7 @@ public final class IntraproceduralTaintAnalysis {
                     traceEdges,
                     definitionStepCopy,
                     useSteps,
+                    expressionStepCopy,
                     evaluationCounts);
         }
     }

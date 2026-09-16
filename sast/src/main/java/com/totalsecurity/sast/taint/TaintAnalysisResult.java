@@ -10,6 +10,7 @@ import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -29,6 +30,7 @@ public final class TaintAnalysisResult {
     private final Set<TaintTraceEdge> traceEdges;
     private final Map<Definition, TaintTraceStep> definitionSteps;
     private final Map<UseSite, TaintTraceStep> useSteps;
+    private final Map<Expression, TaintTraceStep> expressionSteps;
     private final Map<Definition, Integer> evaluationCounts;
 
     TaintAnalysisResult(
@@ -43,6 +45,7 @@ public final class TaintAnalysisResult {
             Set<TaintTraceEdge> traceEdges,
             Map<Definition, TaintTraceStep> definitionSteps,
             Map<UseSite, TaintTraceStep> useSteps,
+            Map<Expression, TaintTraceStep> expressionSteps,
             Map<Definition, Integer> evaluationCounts) {
         this.dataFlow = Objects.requireNonNull(dataFlow, "dataFlow");
         this.seeds = Set.copyOf(seeds);
@@ -55,6 +58,7 @@ public final class TaintAnalysisResult {
         this.traceEdges = Set.copyOf(traceEdges);
         this.definitionSteps = immutableMap(definitionSteps);
         this.useSteps = immutableMap(useSteps);
+        this.expressionSteps = immutableIdentityMap(expressionSteps);
         this.evaluationCounts = immutableMap(evaluationCounts);
     }
 
@@ -117,6 +121,25 @@ public final class TaintAnalysisResult {
         if (target == null) {
             throw new IllegalArgumentException("Use site has no taint provenance node");
         }
+        return traceTo(target);
+    }
+
+    public TaintTrace traceTo(Expression expression) {
+        Objects.requireNonNull(expression, "expression");
+        if (expression instanceof VariableReference reference) {
+            Optional<UseSite> useSite = dataFlow.useSite(reference);
+            if (useSite.isPresent()) {
+                return traceTo(useSite.orElseThrow());
+            }
+        }
+        TaintTraceStep target = expressionSteps.get(expression);
+        if (target == null) {
+            throw new IllegalArgumentException("Expression has no taint provenance node");
+        }
+        return traceTo(target);
+    }
+
+    private TaintTrace traceTo(TaintTraceStep target) {
         LinkedHashSet<TaintTraceStep> steps = new LinkedHashSet<>();
         LinkedHashSet<TaintTraceEdge> edges = new LinkedHashSet<>();
         ArrayDeque<TaintTraceStep> work = new ArrayDeque<>();
@@ -135,7 +158,7 @@ public final class TaintAnalysisResult {
                         }
                     });
         }
-        return new TaintTrace(steps, edges);
+        return new TaintTrace(target, steps, edges);
     }
 
     public int evaluationCount(Definition definition) {
@@ -152,6 +175,12 @@ public final class TaintAnalysisResult {
 
     private static <K, V> Map<K, V> immutableMap(Map<K, V> source) {
         return Collections.unmodifiableMap(new LinkedHashMap<>(source));
+    }
+
+    private static <K, V> Map<K, V> immutableIdentityMap(Map<K, V> source) {
+        IdentityHashMap<K, V> copied = new IdentityHashMap<>();
+        copied.putAll(source);
+        return Collections.unmodifiableMap(copied);
     }
 
     private static <K, V> V require(Map<K, V> values, K key, String kind) {

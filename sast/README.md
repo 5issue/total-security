@@ -1,6 +1,6 @@
 # Total Security SAST
 
-STEP 1 provides Java source parsing and concrete syntax tree inspection. STEP 2 adds a Java-specific semantic extractor and a Tree-sitter-independent Java IR. STEP 2B adds an ordered statement hierarchy to method bodies. STEP 3 builds method-level control-flow graphs from that IR without accessing Tree-sitter nodes. STEP 4 adds intraprocedural flow-sensitive reaching-definitions analysis over the IR and CFG. STEP 5 adds intraprocedural flow-sensitive taint propagation over those reaching definitions. STEP 6 adds Java/Spring rule matching and injectable method-call taint semantics without creating vulnerability findings. STEP 6B makes model precedence explicit and provides rule-aware taint orchestration. Java parsing uses Tree-sitter with the official Java grammar packaged for the Java binding.
+STEP 1 provides Java source parsing and concrete syntax tree inspection. STEP 2 adds a Java-specific semantic extractor and a Tree-sitter-independent Java IR. STEP 2B adds an ordered statement hierarchy to method bodies. STEP 3 builds method-level control-flow graphs from that IR without accessing Tree-sitter nodes. STEP 4 adds intraprocedural flow-sensitive reaching-definitions analysis over the IR and CFG. STEP 5 adds intraprocedural flow-sensitive taint propagation over those reaching definitions. STEP 6 adds Java/Spring rule matching and injectable method-call taint semantics. STEP 6B makes model precedence explicit and provides rule-aware taint orchestration. STEP 7 adds the first vulnerability detector and produces evidence-backed SQL Injection (CWE-89) findings for supported flows. Java parsing uses Tree-sitter with the official Java grammar packaged for the Java binding.
 
 The extractor currently preserves package/import declarations, classes, interfaces, methods, constructors, parameters, fields, local variables, assignments, method calls, returns, and annotations. Expressions are represented structurally as variable references, literals, binary and assignment expressions, method calls, object creation, field access, parenthesized expressions, or explicit unknown expressions.
 
@@ -14,7 +14,7 @@ The IR does not assign Spring or security meaning to annotations or API names.
 
 The CFG currently supports ordered blocks, if/else, while, do-while, classic for, an abstract enhanced-for iteration model, colon-style switch fall-through, break, continue, return, and throw-to-method-exit. `UnknownStatement` is retained sequentially and reported through `unsupportedControlFlow`; it is not treated as fully supported.
 
-Switch arrow-rule value/yield semantics, labeled break/continue, precise try/catch/finally exception flow, and exceptions thrown by called methods are not fully modeled. Call graphs, complete type resolution, vulnerability Finding generation, and pattern analysis are not implemented.
+Switch arrow-rule value/yield semantics, labeled break/continue, precise try/catch/finally exception flow, and exceptions thrown by called methods are not fully modeled. Call graphs, complete type resolution, general finding serialization/output, and pattern analysis are not implemented.
 
 ## Intraprocedural data flow
 
@@ -30,7 +30,7 @@ The reaching-definitions layer does not perform Java type resolution, alias or p
 
 Variable references join the taint of their reaching definitions. Literals are clean, binary operands are joined, and parenthesized expressions forward their inner value. Receiver and argument taint are retained separately for method calls. Without an explicit expression seed or injected propagation model, arbitrary method-call returns, constructed objects, field values, unresolved references, and unknown expressions are `UNKNOWN`; their source text is not searched to infer taint.
 
-Results expose definition, expression, variable-use, method receiver, and argument taint. A finite static provenance graph links external seeds, definitions, use sites, and supported expression steps, preserving multiple seed origins and representing loop cycles without growing an iteration-specific trace. The STEP 5 core does not infer framework meaning; STEP 6 supplies explicit seeds and method semantics. Vulnerability decisions, interprocedural taint, call graphs, alias/points-to analysis, heap-sensitive analysis, and complete field-sensitive analysis remain unsupported.
+Results expose definition, expression, variable-use, method receiver, and argument taint. A finite static provenance graph links external seeds, definitions, use sites, and supported expression steps, preserving multiple seed origins and representing loop cycles without growing an iteration-specific trace. The STEP 5 core does not infer framework meaning or make vulnerability decisions; STEP 6 supplies explicit seeds and method semantics, and STEP 7 consumes those results in a separate detector. Interprocedural taint, call graphs, alias/points-to analysis, heap-sensitive analysis, and complete field-sensitive analysis remain unsupported.
 
 ## Java/Spring rules and call-taint semantics
 
@@ -44,7 +44,15 @@ Method-call return semantics are injected into taint analysis. The model support
 
 `RuleAwareTaintAnalysis` is the recommended STEP 6/7 entry point. It matches sources, converts them to seeds, injects the registry's method semantics into `IntraproceduralTaintAnalysis`, and retains both source and sink matches with the taint result. The low-level two-argument taint API remains available for framework-independent STEP 5 use, but it intentionally has no method models and is not the recommended path when framework rules are enabled.
 
-STEP 6 does not generate SQL Injection or other vulnerability findings, CWE/severity data, or Finding JSON. It also does not implement call graphs, interprocedural taint, full overload/type resolution, alias/points-to analysis, dynamic dispatch, pattern analysis, or hardcoded-secret detection.
+## SQL Injection findings
+
+`SqlInjectionDetector` consumes only `RuleAwareTaintResult`; it does not inspect Tree-sitter nodes or rediscover API names. `SinkMatch` carries the stable `SQL_TEXT` category, and the detector examines each declared sensitive argument. A finding is produced only when that argument is `TAINTED`. `CLEAN` and `UNKNOWN` arguments do not produce confirmed findings.
+
+Each finding uses rule ID `SQL_INJECTION`, vulnerability type `SQL Injection`, CWE `CWE-89`, and detector metadata severity `HIGH`. `HIGH` is not a calculated CVSS score. The primary location is the SQL argument. Source evidence retains the source rule, source kind, seed, location, and parameter or expression summary. Sink evidence separately retains the environment sink rule, method, argument index, category, and location. Flows reuse the finite STEP 5 provenance graph and contain ordered source, definition, use, expression, and sink steps. Both variable arguments and direct composite expressions are traceable; no second taint engine is used.
+
+Findings are deduplicated by the physical sink call location and sensitive argument index, while every taint origin at that argument is retained in the finding. Prepared-statement/JPA parameter binding and `JdbcTemplate` placeholder data are not treated as sanitizers: they are safe in the currently modeled cases because the SQL-text argument itself is a clean literal and binding arguments are not `SQL_TEXT` positions.
+
+This detector covers only sources, sinks, expressions, and lightweight receiver types currently recognized by the rule and taint layers. An unmodeled method return remains `UNKNOWN`, so flows such as `customBuilder(input)` can be false negatives. The implementation does not claim complete Java/Spring SQL Injection coverage. It does not implement other vulnerability categories, interprocedural Controller-to-Service-to-Repository flow, call graphs, full overload/type resolution, dynamic dispatch, alias/points-to analysis, whole-program analysis, JSON output, pattern analysis, or hardcoded-secret detection.
 
 ## Requirements
 

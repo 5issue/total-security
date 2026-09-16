@@ -8,12 +8,14 @@ import java.util.Set;
 
 public record SinkMatch(
         String ruleId,
+        SinkCategory category,
         MethodCallExpression call,
         Set<Integer> sensitiveArgumentIndexes,
         SourceLocation location,
         String evidence) {
     public SinkMatch {
         Objects.requireNonNull(ruleId, "ruleId");
+        Objects.requireNonNull(category, "category");
         Objects.requireNonNull(call, "call");
         sensitiveArgumentIndexes = Set.copyOf(new LinkedHashSet<>(sensitiveArgumentIndexes));
         Objects.requireNonNull(location, "location");

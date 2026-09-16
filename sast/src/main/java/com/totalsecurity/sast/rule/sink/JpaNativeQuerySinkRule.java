@@ -23,6 +23,7 @@ public final class JpaNativeQuerySinkRule implements SinkRule {
         }
         return Optional.of(new SinkMatch(
                 ID,
+                SinkCategory.SQL_TEXT,
                 context.call(),
                 Set.of(0),
                 context.location(),
