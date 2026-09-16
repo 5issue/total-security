@@ -4,5 +4,6 @@ package com.totalsecurity.sast.rule.sink;
 public enum SinkCategory {
     SQL_TEXT,
     COMMAND_EXECUTION,
-    FILESYSTEM_PATH
+    FILESYSTEM_PATH,
+    NETWORK_REQUEST_TARGET
 }

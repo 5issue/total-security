@@ -178,6 +178,7 @@ public final class TaintSinkFindingFactory {
             case SQL_TEXT -> "SQL text";
             case COMMAND_EXECUTION -> "Command execution";
             case FILESYSTEM_PATH -> "Filesystem path";
+            case NETWORK_REQUEST_TARGET -> "Network request target";
         };
         return subject + " argument " + argumentIndex + " of " + sink.call().call().methodName();
     }

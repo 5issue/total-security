@@ -35,6 +35,17 @@ public final class KnownMethodReturnTypes {
                 && arity == 0) {
             return Optional.of(KnownMethod.PATH_RECEIVER_TRANSFORM);
         }
+        if (receiverQualifiedType.equals("java.net.URI")
+                && methodName.equals("create")
+                && arity == 1
+                && hasType(argumentQualifiedTypes, 0, "java.lang.String")) {
+            return Optional.of(KnownMethod.URI_CREATE);
+        }
+        if (receiverQualifiedType.equals("java.net.URI")
+                && methodName.equals("normalize")
+                && arity == 0) {
+            return Optional.of(KnownMethod.URI_NORMALIZE);
+        }
         return Optional.empty();
     }
 
@@ -53,7 +64,9 @@ public final class KnownMethodReturnTypes {
         RUNTIME_GET_RUNTIME("java.lang.Runtime"),
         PATH_FACTORY("java.nio.file.Path"),
         PATH_RESOLVE("java.nio.file.Path"),
-        PATH_RECEIVER_TRANSFORM("java.nio.file.Path");
+        PATH_RECEIVER_TRANSFORM("java.nio.file.Path"),
+        URI_CREATE("java.net.URI"),
+        URI_NORMALIZE("java.net.URI");
 
         private final String returnType;
 
