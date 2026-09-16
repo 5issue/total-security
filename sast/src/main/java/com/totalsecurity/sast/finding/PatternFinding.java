@@ -1,29 +1,28 @@
 package com.totalsecurity.sast.finding;
 
 import com.totalsecurity.sast.ir.SourceLocation;
-import java.util.List;
 import java.util.Objects;
 
-/** Tree-sitter-independent vulnerability evidence model. */
-public record Finding(
+/** Finding evidence for a structural pattern that has no source-to-sink flow. */
+public record PatternFinding(
         String ruleId,
         String vulnerabilityType,
         String cwe,
         FindingSeverity severity,
         SourceLocation primaryLocation,
-        List<FindingSource> sources,
-        FindingSink sink,
-        List<FindingFlow> flows,
+        String identifier,
+        PatternOccurrenceKind occurrenceKind,
+        String literalKind,
         String evidence) implements FindingResult {
-    public Finding {
+    public PatternFinding {
         requireText(ruleId, "ruleId");
         requireText(vulnerabilityType, "vulnerabilityType");
         requireText(cwe, "cwe");
         Objects.requireNonNull(severity, "severity");
         Objects.requireNonNull(primaryLocation, "primaryLocation");
-        sources = List.copyOf(sources);
-        Objects.requireNonNull(sink, "sink");
-        flows = List.copyOf(flows);
+        requireText(identifier, "identifier");
+        Objects.requireNonNull(occurrenceKind, "occurrenceKind");
+        requireText(literalKind, "literalKind");
         requireText(evidence, "evidence");
     }
 

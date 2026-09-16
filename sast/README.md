@@ -1,6 +1,6 @@
 # Total Security SAST
 
-STEP 1 provides Java source parsing and concrete syntax tree inspection. STEP 2 adds a Java-specific semantic extractor and a Tree-sitter-independent Java IR. STEP 2B adds an ordered statement hierarchy to method bodies. STEP 3 builds method-level control-flow graphs from that IR without accessing Tree-sitter nodes. STEP 4 adds intraprocedural flow-sensitive reaching-definitions analysis over the IR and CFG. STEP 5 adds intraprocedural flow-sensitive taint propagation over those reaching definitions. STEP 6 adds Java/Spring rule matching and injectable method-call taint semantics. STEP 6B makes model precedence explicit and provides rule-aware taint orchestration. STEP 7 adds the first vulnerability detector and produces evidence-backed SQL Injection (CWE-89) findings for supported flows. Java parsing uses Tree-sitter with the official Java grammar packaged for the Java binding.
+STEP 1 provides Java source parsing and concrete syntax tree inspection. STEP 2 adds a Java-specific semantic extractor and a Tree-sitter-independent Java IR. STEP 2B adds an ordered statement hierarchy to method bodies. STEP 3 builds method-level control-flow graphs from that IR without accessing Tree-sitter nodes. STEP 4 adds intraprocedural flow-sensitive reaching-definitions analysis over the IR and CFG. STEP 5 adds intraprocedural flow-sensitive taint propagation over those reaching definitions. STEP 6 adds Java/Spring rule matching and injectable method-call taint semantics. STEP 6B makes model precedence explicit and provides rule-aware taint orchestration. STEP 7 adds the first vulnerability detector and produces evidence-backed SQL Injection (CWE-89) findings for supported flows. STEP 8 adds an independent Java IR pattern-analysis path and its first Hardcoded Credential (CWE-798) detector. Java parsing uses Tree-sitter with the official Java grammar packaged for the Java binding.
 
 The extractor currently preserves package/import declarations, classes, interfaces, methods, constructors, parameters, fields, local variables, assignments, method calls, returns, and annotations. Expressions are represented structurally as variable references, literals, binary and assignment expressions, method calls, object creation, field access, parenthesized expressions, or explicit unknown expressions.
 
@@ -14,7 +14,7 @@ The IR does not assign Spring or security meaning to annotations or API names.
 
 The CFG currently supports ordered blocks, if/else, while, do-while, classic for, an abstract enhanced-for iteration model, colon-style switch fall-through, break, continue, return, and throw-to-method-exit. `UnknownStatement` is retained sequentially and reported through `unsupportedControlFlow`; it is not treated as fully supported.
 
-Switch arrow-rule value/yield semantics, labeled break/continue, precise try/catch/finally exception flow, and exceptions thrown by called methods are not fully modeled. Call graphs, complete type resolution, general finding serialization/output, and pattern analysis are not implemented.
+Switch arrow-rule value/yield semantics, labeled break/continue, precise try/catch/finally exception flow, and exceptions thrown by called methods are not fully modeled. Call graphs, complete type resolution, and general finding serialization/output are not implemented.
 
 ## Intraprocedural data flow
 
@@ -52,7 +52,19 @@ Each finding uses rule ID `SQL_INJECTION`, vulnerability type `SQL Injection`, C
 
 Findings are deduplicated by the physical sink call location and sensitive argument index, while every taint origin at that argument is retained in the finding. Prepared-statement/JPA parameter binding and `JdbcTemplate` placeholder data are not treated as sanitizers: they are safe in the currently modeled cases because the SQL-text argument itself is a clean literal and binding arguments are not `SQL_TEXT` positions.
 
-This detector covers only sources, sinks, expressions, and lightweight receiver types currently recognized by the rule and taint layers. An unmodeled method return remains `UNKNOWN`, so flows such as `customBuilder(input)` can be false negatives. The implementation does not claim complete Java/Spring SQL Injection coverage. It does not implement other vulnerability categories, interprocedural Controller-to-Service-to-Repository flow, call graphs, full overload/type resolution, dynamic dispatch, alias/points-to analysis, whole-program analysis, JSON output, pattern analysis, or hardcoded-secret detection.
+This detector covers only sources, sinks, expressions, and lightweight receiver types currently recognized by the rule and taint layers. An unmodeled method return remains `UNKNOWN`, so flows such as `customBuilder(input)` can be false negatives. The implementation does not claim complete Java/Spring SQL Injection coverage. It does not implement other flow vulnerability categories, interprocedural Controller-to-Service-to-Repository flow, call graphs, full overload/type resolution, dynamic dispatch, alias/points-to analysis, whole-program analysis, or JSON output.
+
+## Pattern analysis and hardcoded credentials
+
+Pattern Analysis is a separate analysis path from CFG, reaching definitions, taint, and source/sink rules. `PatternAnalysis` runs `PatternDetector` implementations directly over the Tree-sitter-independent `JavaFileInfo` IR. The default registry currently contains only `HardcodedCredentialDetector`; callers can supply additional detectors without coupling them to flow analysis.
+
+The STEP 8 detector combines a supported sensitive identifier with a direct, non-empty Java string literal initializer or assignment. Fields, local variables, and assignments with a stable variable or field target are supported. Identifier normalization splits camelCase, acronym-style camelCase, snake_case, and other non-alphanumeric separators into lower-case words, then compares the complete normalized identifier against a bounded credential vocabulary. It does not use broad substring matching, so names such as `tokenCount` and `passwordEnabled` are not findings.
+
+Only structural `string_literal` IR values containing non-whitespace content are confirmed. Empty and whitespace-only strings, `null`, character/numeric/boolean literals, method-call returns, environment/config/request values, and arbitrary expressions are not treated as hardcoded credentials. Source text is not searched with regular expressions to reconstruct declarations or assignments.
+
+Pattern findings use rule ID `HARDCODED_CREDENTIAL`, vulnerability type `Hardcoded Credential`, CWE `CWE-798`, and detector metadata severity `HIGH`; this severity is not a calculated CVSS score. The primary location points to the literal. Evidence retains the identifier, declaration/assignment kind, literal kind, location, and a redacted reason, but never copies the literal value. Pattern findings intentionally have no fabricated source, sink, or flow. Flow findings and pattern findings share `FindingResult` metadata while retaining evidence models suited to their different analysis methods. Findings are deduplicated by rule ID and literal source location, so distinct assignments remain distinct findings.
+
+This structural detector does not claim to find every secret. AWS access-key formats, GitHub token formats, JWTs, private-key PEM blocks, entropy-based detection, raw source regex scanning, and configuration/YAML/properties scanning remain unsupported. These are future Pattern Analysis extensions rather than taint rules.
 
 ## Requirements
 
