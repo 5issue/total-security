@@ -13,6 +13,7 @@ import com.totalsecurity.sast.rule.sink.JdbcConnectionSqlSinkRule;
 import com.totalsecurity.sast.rule.sink.JdbcStatementSqlSinkRule;
 import com.totalsecurity.sast.rule.sink.JdbcTemplateSqlSinkRule;
 import com.totalsecurity.sast.rule.sink.JpaNativeQuerySinkRule;
+import com.totalsecurity.sast.rule.sink.JavaRuntimeCommandSinkRule;
 import com.totalsecurity.sast.rule.sink.SinkMatch;
 import com.totalsecurity.sast.rule.sink.SinkRule;
 import com.totalsecurity.sast.rule.source.ServletRequestSourceRule;
@@ -59,7 +60,8 @@ public final class RuleRegistry {
                         new JdbcStatementSqlSinkRule(),
                         new JdbcConnectionSqlSinkRule(),
                         new JdbcTemplateSqlSinkRule(),
-                        new JpaNativeQuerySinkRule()),
+                        new JpaNativeQuerySinkRule(),
+                        new JavaRuntimeCommandSinkRule()),
                 List.of(),
                 List.of(new JavaStringMethodTaintModel()));
     }

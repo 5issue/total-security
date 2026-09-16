@@ -42,8 +42,18 @@ public final class LightweightTypeContext {
             return Optional.empty();
         }
 
-        if (type.equals("String")) {
-            return Optional.of("java.lang.String");
+        Optional<String> declaredHere = file.types().stream()
+                .filter(candidate -> candidate.name().equals(type))
+                .findFirst()
+                .map(candidate -> file.packageName()
+                        .map(packageName -> packageName + "." + candidate.name())
+                        .orElse(candidate.name()));
+        if (declaredHere.isPresent()) {
+            return declaredHere;
+        }
+
+        if (type.equals("String") || type.equals("Runtime")) {
+            return Optional.of("java.lang." + type);
         }
 
         List<String> wildcardPackages = file.imports().stream()
@@ -55,6 +65,22 @@ public final class LightweightTypeContext {
             return Optional.of(wildcardPackages.getFirst() + "." + type);
         }
         return file.packageName().map(packageName -> packageName + "." + type);
+    }
+
+    /** Qualifies a declared type while retaining array dimensions for overload filtering. */
+    public Optional<String> qualifyTypeShape(String declaredType) {
+        String value = Objects.requireNonNull(declaredType, "declaredType").trim();
+        int dimensions = 0;
+        while (value.endsWith("[]")) {
+            dimensions++;
+            value = value.substring(0, value.length() - 2).trim();
+        }
+        if (value.endsWith("...")) {
+            dimensions++;
+            value = value.substring(0, value.length() - 3).trim();
+        }
+        String suffix = "[]".repeat(dimensions);
+        return qualifyType(value).map(qualified -> qualified + suffix);
     }
 
     public Optional<String> qualifyAnnotation(String annotationName) {

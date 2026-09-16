@@ -2,5 +2,6 @@ package com.totalsecurity.sast.rule.sink;
 
 /** Stable semantic category consumed by vulnerability detectors. */
 public enum SinkCategory {
-    SQL_TEXT
+    SQL_TEXT,
+    COMMAND_EXECUTION
 }

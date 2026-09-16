@@ -77,7 +77,7 @@ public final class CallSiteContextResolver {
                 qualifiedType,
                 call.call().methodName(),
                 call.call().arguments(),
-                call.call().arguments().stream().map(this::qualifiedTypeOf).toList(),
+                call.call().arguments().stream().map(this::qualifiedTypeShapeOf).toList(),
                 call.location(),
                 types);
     }
@@ -108,13 +108,17 @@ public final class CallSiteContextResolver {
                     ? Optional.of("String")
                     : Optional.empty();
             case FieldAccessExpression field -> declaredTypeOf(field);
-            case MethodCallExpression ignored -> Optional.empty();
+            case MethodCallExpression call -> knownMethodReturnType(call);
             case UnknownExpression ignored -> Optional.empty();
         };
     }
 
     public Optional<String> qualifiedTypeOf(Expression expression) {
         return declaredTypeOf(expression).flatMap(types::qualifyType);
+    }
+
+    public Optional<String> qualifiedTypeShapeOf(Expression expression) {
+        return declaredTypeOf(expression).flatMap(types::qualifyTypeShape);
     }
 
     public boolean isStringLike(Expression expression) {
@@ -145,6 +149,22 @@ public final class CallSiteContextResolver {
                     .findFirst();
         }
         return Optional.empty();
+    }
+
+    private Optional<String> knownMethodReturnType(MethodCallExpression call) {
+        if (!call.call().methodName().equals("getRuntime") || !call.call().arguments().isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<Expression> receiver = call.call().receiver();
+        if (receiver.isEmpty() || !(receiver.orElseThrow() instanceof VariableReference typeReference)) {
+            return Optional.empty();
+        }
+        if (declaredTypeOf(typeReference).isPresent()) {
+            return Optional.empty();
+        }
+        return types.qualifyType(typeReference.name())
+                .filter("java.lang.Runtime"::equals)
+                .map(ignored -> "java.lang.Runtime");
     }
 
     private void collectControl(
