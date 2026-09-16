@@ -16,6 +16,7 @@ import com.totalsecurity.sast.rule.sink.JpaNativeQuerySinkRule;
 import com.totalsecurity.sast.rule.sink.JavaRuntimeCommandSinkRule;
 import com.totalsecurity.sast.rule.sink.JavaNioFilesPathSinkRule;
 import com.totalsecurity.sast.rule.sink.SpringRestTemplateNetworkSinkRule;
+import com.totalsecurity.sast.rule.sink.JndiLdapFilterSinkRule;
 import com.totalsecurity.sast.rule.sink.SinkMatch;
 import com.totalsecurity.sast.rule.sink.SinkRule;
 import com.totalsecurity.sast.rule.source.ServletRequestSourceRule;
@@ -67,7 +68,8 @@ public final class RuleRegistry {
                         new JpaNativeQuerySinkRule(),
                         new JavaRuntimeCommandSinkRule(),
                         new JavaNioFilesPathSinkRule(),
-                        new SpringRestTemplateNetworkSinkRule()),
+                        new SpringRestTemplateNetworkSinkRule(),
+                        new JndiLdapFilterSinkRule()),
                 List.of(),
                 List.of(
                         new JavaStringMethodTaintModel(),

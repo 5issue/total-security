@@ -179,6 +179,7 @@ public final class TaintSinkFindingFactory {
             case COMMAND_EXECUTION -> "Command execution";
             case FILESYSTEM_PATH -> "Filesystem path";
             case NETWORK_REQUEST_TARGET -> "Network request target";
+            case LDAP_FILTER -> "LDAP filter";
         };
         return subject + " argument " + argumentIndex + " of " + sink.call().call().methodName();
     }

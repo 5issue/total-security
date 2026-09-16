@@ -52,7 +52,7 @@ public final class LightweightTypeContext {
             return declaredHere;
         }
 
-        if (type.equals("String") || type.equals("Runtime")) {
+        if (type.equals("String") || type.equals("Runtime") || type.equals("Object")) {
             return Optional.of("java.lang." + type);
         }
 
