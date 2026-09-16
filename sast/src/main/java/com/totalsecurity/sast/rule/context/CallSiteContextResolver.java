@@ -65,7 +65,7 @@ public final class CallSiteContextResolver {
 
     public CallSiteContext resolve(MethodCallExpression call) {
         Objects.requireNonNull(call, "call");
-        Optional<String> declaredType = call.call().receiver().flatMap(this::declaredTypeOf);
+        Optional<String> declaredType = call.call().receiver().flatMap(this::declaredReceiverTypeOf);
         Optional<String> qualifiedType = declaredType.flatMap(types::qualifyType);
         return new CallSiteContext(
                 file,
@@ -152,19 +152,31 @@ public final class CallSiteContextResolver {
     }
 
     private Optional<String> knownMethodReturnType(MethodCallExpression call) {
-        if (!call.call().methodName().equals("getRuntime") || !call.call().arguments().isEmpty()) {
+        Optional<String> receiverType = call.call().receiver().flatMap(this::qualifiedReceiverTypeOf);
+        if (receiverType.isEmpty()) {
             return Optional.empty();
         }
-        Optional<Expression> receiver = call.call().receiver();
-        if (receiver.isEmpty() || !(receiver.orElseThrow() instanceof VariableReference typeReference)) {
-            return Optional.empty();
+        List<Optional<String>> argumentTypes = call.call().arguments().stream()
+                .map(this::qualifiedTypeShapeOf)
+                .toList();
+        return KnownMethodReturnTypes.match(
+                        receiverType.orElseThrow(), call.call().methodName(), argumentTypes)
+                .map(KnownMethodReturnTypes.KnownMethod::returnType);
+    }
+
+    private Optional<String> declaredReceiverTypeOf(Expression receiver) {
+        Optional<String> declared = declaredTypeOf(receiver);
+        if (declared.isPresent()) {
+            return declared;
         }
-        if (declaredTypeOf(typeReference).isPresent()) {
-            return Optional.empty();
+        if (receiver instanceof VariableReference typeReference) {
+            return types.qualifyType(typeReference.name());
         }
-        return types.qualifyType(typeReference.name())
-                .filter("java.lang.Runtime"::equals)
-                .map(ignored -> "java.lang.Runtime");
+        return Optional.empty();
+    }
+
+    private Optional<String> qualifiedReceiverTypeOf(Expression receiver) {
+        return declaredReceiverTypeOf(receiver).flatMap(types::qualifyType);
     }
 
     private void collectControl(

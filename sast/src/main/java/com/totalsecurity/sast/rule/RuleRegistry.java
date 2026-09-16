@@ -14,6 +14,7 @@ import com.totalsecurity.sast.rule.sink.JdbcStatementSqlSinkRule;
 import com.totalsecurity.sast.rule.sink.JdbcTemplateSqlSinkRule;
 import com.totalsecurity.sast.rule.sink.JpaNativeQuerySinkRule;
 import com.totalsecurity.sast.rule.sink.JavaRuntimeCommandSinkRule;
+import com.totalsecurity.sast.rule.sink.JavaNioFilesPathSinkRule;
 import com.totalsecurity.sast.rule.sink.SinkMatch;
 import com.totalsecurity.sast.rule.sink.SinkRule;
 import com.totalsecurity.sast.rule.source.ServletRequestSourceRule;
@@ -22,6 +23,7 @@ import com.totalsecurity.sast.rule.source.SourceRule;
 import com.totalsecurity.sast.rule.source.SpringMvcParameterSourceRule;
 import com.totalsecurity.sast.taint.TaintSeed;
 import com.totalsecurity.sast.taint.model.JavaStringMethodTaintModel;
+import com.totalsecurity.sast.taint.model.JavaNioPathMethodTaintModel;
 import com.totalsecurity.sast.taint.model.MethodTaintModel;
 import com.totalsecurity.sast.taint.model.MethodTaintModelRegistry;
 import com.totalsecurity.sast.taint.model.MethodTaintSemanticsProvider;
@@ -61,9 +63,10 @@ public final class RuleRegistry {
                         new JdbcConnectionSqlSinkRule(),
                         new JdbcTemplateSqlSinkRule(),
                         new JpaNativeQuerySinkRule(),
-                        new JavaRuntimeCommandSinkRule()),
+                        new JavaRuntimeCommandSinkRule(),
+                        new JavaNioFilesPathSinkRule()),
                 List.of(),
-                List.of(new JavaStringMethodTaintModel()));
+                List.of(new JavaStringMethodTaintModel(), new JavaNioPathMethodTaintModel()));
     }
 
     public List<SourceRule> sourceRules() {

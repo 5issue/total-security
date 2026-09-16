@@ -177,6 +177,7 @@ public final class TaintSinkFindingFactory {
         String subject = switch (sink.category()) {
             case SQL_TEXT -> "SQL text";
             case COMMAND_EXECUTION -> "Command execution";
+            case FILESYSTEM_PATH -> "Filesystem path";
         };
         return subject + " argument " + argumentIndex + " of " + sink.call().call().methodName();
     }
