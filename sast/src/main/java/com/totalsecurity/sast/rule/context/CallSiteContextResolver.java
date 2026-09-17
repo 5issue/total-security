@@ -75,6 +75,7 @@ public final class CallSiteContextResolver {
                 call.call().receiver(),
                 declaredType,
                 qualifiedType,
+                call.call().receiver().map(this::isValueReceiver).orElse(false),
                 call.call().methodName(),
                 call.call().arguments(),
                 call.call().arguments().stream().map(this::qualifiedTypeShapeOf).toList(),
@@ -189,6 +190,20 @@ public final class CallSiteContextResolver {
 
     private Optional<String> qualifiedReceiverTypeOf(Expression receiver) {
         return declaredReceiverTypeOf(receiver).flatMap(types::qualifyType);
+    }
+
+    private boolean isValueReceiver(Expression receiver) {
+        if (!(receiver instanceof VariableReference reference)) {
+            return true;
+        }
+        if (reference.name().equals("this") || reference.name().equals("super")) {
+            return true;
+        }
+        if (dataFlow.resolvedSymbol(reference).isPresent()) {
+            return true;
+        }
+        return enclosingClass.fields().stream()
+                .anyMatch(field -> field.name().equals(reference.name()));
     }
 
     private void collectControl(

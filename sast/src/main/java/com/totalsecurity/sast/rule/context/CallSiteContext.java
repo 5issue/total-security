@@ -19,6 +19,7 @@ public record CallSiteContext(
         Optional<Expression> receiver,
         Optional<String> receiverDeclaredType,
         Optional<String> receiverQualifiedType,
+        boolean receiverBoundToValue,
         String methodName,
         List<Expression> arguments,
         List<Optional<String>> argumentQualifiedTypes,

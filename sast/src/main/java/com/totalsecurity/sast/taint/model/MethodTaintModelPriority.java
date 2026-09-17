@@ -4,6 +4,7 @@ package com.totalsecurity.sast.taint.model;
 public enum MethodTaintModelPriority {
     GENERIC_PROPAGATION(100),
     FRAMEWORK_SPECIFIC_PROPAGATION(200),
+    SAME_CLASS_INTERPROCEDURAL(250),
     SANITIZER(300);
 
     private final int rank;

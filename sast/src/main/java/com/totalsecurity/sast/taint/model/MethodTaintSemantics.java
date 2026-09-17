@@ -44,4 +44,9 @@ public record MethodTaintSemantics(
     public static MethodTaintSemantics sanitizedReturn() {
         return new MethodTaintSemantics(MethodTaintBehavior.SANITIZED_RETURN, Set.of());
     }
+
+    /** A dependency-proven clean value; unlike SANITIZED_RETURN this is not a security sanitizer. */
+    public static MethodTaintSemantics cleanReturn() {
+        return new MethodTaintSemantics(MethodTaintBehavior.CLEAN_RETURN, Set.of());
+    }
 }

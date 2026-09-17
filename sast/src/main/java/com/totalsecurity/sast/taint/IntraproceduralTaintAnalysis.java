@@ -333,7 +333,7 @@ public final class IntraproceduralTaintAnalysis {
                 MethodTaintSemantics semantics) {
             return switch (semantics.behavior()) {
                 case UNKNOWN_RETURN -> TaintValue.unknown();
-                case SANITIZED_RETURN -> TaintValue.clean();
+                case CLEAN_RETURN, SANITIZED_RETURN -> TaintValue.clean();
                 case PROPAGATE_RECEIVER_TO_RETURN -> {
                     TaintValue value = receiver.orElseGet(TaintValue::unknown);
                     connectMethodPart(call.call().receiver(), value, call);
