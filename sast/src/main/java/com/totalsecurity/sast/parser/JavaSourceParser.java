@@ -1,6 +1,7 @@
 package com.totalsecurity.sast.parser;
 
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,7 +28,12 @@ public final class JavaSourceParser implements AutoCloseable {
     }
 
     public ParsedJavaFile parse(Path javaFile) throws IOException {
+        return parse(javaFile, StandardCharsets.UTF_8);
+    }
+
+    public ParsedJavaFile parse(Path javaFile, Charset charset) throws IOException {
         Objects.requireNonNull(javaFile, "javaFile");
+        Objects.requireNonNull(charset, "charset");
         Path normalizedPath = javaFile.toAbsolutePath().normalize();
         if (!normalizedPath.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".java")) {
             throw new IllegalArgumentException("Expected a .java file: " + normalizedPath);
@@ -36,8 +42,9 @@ public final class JavaSourceParser implements AutoCloseable {
             throw new IOException("Java source file does not exist: " + normalizedPath);
         }
 
-        byte[] sourceBytes = Files.readAllBytes(normalizedPath);
-        String source = new String(sourceBytes, StandardCharsets.UTF_8);
+        byte[] fileBytes = Files.readAllBytes(normalizedPath);
+        String source = new String(fileBytes, charset);
+        byte[] sourceBytes = source.getBytes(StandardCharsets.UTF_8);
         TSTree tree = parser.parseString(null, source);
         if (tree == null) {
             throw new IllegalStateException("Tree-sitter did not produce a syntax tree");
@@ -51,4 +58,3 @@ public final class JavaSourceParser implements AutoCloseable {
         javaLanguage.close();
     }
 }
-

@@ -46,4 +46,3 @@ public final class ParsedJavaFile implements AutoCloseable {
         tree.close();
     }
 }
-
