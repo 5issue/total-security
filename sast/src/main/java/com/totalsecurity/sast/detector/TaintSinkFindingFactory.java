@@ -206,6 +206,7 @@ public final class TaintSinkFindingFactory {
             case NETWORK_REQUEST_TARGET -> "Network request target";
             case LDAP_FILTER -> "LDAP filter";
             case REDIRECT_TARGET -> "HTTP redirect target";
+            case HTTP_RESPONSE_BODY -> "HTTP response body";
         };
         return subject + " argument " + argumentIndex + " of " + sink.call().call().methodName();
     }

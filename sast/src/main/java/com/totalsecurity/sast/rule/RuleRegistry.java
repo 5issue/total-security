@@ -14,6 +14,7 @@ import com.totalsecurity.sast.rule.sink.JdbcStatementSqlSinkRule;
 import com.totalsecurity.sast.rule.sink.JdbcTemplateSqlSinkRule;
 import com.totalsecurity.sast.rule.sink.JpaNativeQuerySinkRule;
 import com.totalsecurity.sast.rule.sink.JakartaServletRedirectSinkRule;
+import com.totalsecurity.sast.rule.sink.JavaPrintWriterResponseBodySinkRule;
 import com.totalsecurity.sast.rule.sink.JavaRuntimeCommandSinkRule;
 import com.totalsecurity.sast.rule.sink.JavaNioFilesPathSinkRule;
 import com.totalsecurity.sast.rule.sink.SpringRestTemplateNetworkSinkRule;
@@ -71,7 +72,8 @@ public final class RuleRegistry {
                         new JavaNioFilesPathSinkRule(),
                         new SpringRestTemplateNetworkSinkRule(),
                         new JndiLdapFilterSinkRule(),
-                        new JakartaServletRedirectSinkRule()),
+                        new JakartaServletRedirectSinkRule(),
+                        new JavaPrintWriterResponseBodySinkRule()),
                 List.of(),
                 List.of(
                         new JavaStringMethodTaintModel(),

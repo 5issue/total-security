@@ -28,7 +28,13 @@ public final class JavaNioPathMethodTaintModel implements MethodTaintModel {
                             Optional.of(MethodTaintSemantics.propagateReceiverAndArguments());
                     case PATH_RECEIVER_TRANSFORM ->
                             Optional.of(MethodTaintSemantics.propagateReceiver());
-                    case RUNTIME_GET_RUNTIME, URI_CREATE, URI_NORMALIZE -> Optional.empty();
+                    case RUNTIME_GET_RUNTIME,
+                            URI_CREATE,
+                            URI_NORMALIZE,
+                            SERVLET_RESPONSE_GET_WRITER,
+                            SERVLET_REQUEST_STRING_VALUE,
+                            SERVLET_REQUEST_INPUT_STREAM,
+                            SPRING_HTML_ESCAPE -> Optional.empty();
                 });
     }
 }

@@ -46,6 +46,29 @@ public final class KnownMethodReturnTypes {
                 && arity == 0) {
             return Optional.of(KnownMethod.URI_NORMALIZE);
         }
+        if (receiverQualifiedType.equals("jakarta.servlet.http.HttpServletResponse")
+                && methodName.equals("getWriter")
+                && arity == 0) {
+            return Optional.of(KnownMethod.SERVLET_RESPONSE_GET_WRITER);
+        }
+        if (receiverQualifiedType.equals("jakarta.servlet.http.HttpServletRequest")
+                && ((methodName.equals("getParameter") || methodName.equals("getHeader"))
+                                && arity == 1
+                                && hasType(argumentQualifiedTypes, 0, "java.lang.String")
+                        || methodName.equals("getQueryString") && arity == 0)) {
+            return Optional.of(KnownMethod.SERVLET_REQUEST_STRING_VALUE);
+        }
+        if (receiverQualifiedType.equals("jakarta.servlet.http.HttpServletRequest")
+                && methodName.equals("getInputStream")
+                && arity == 0) {
+            return Optional.of(KnownMethod.SERVLET_REQUEST_INPUT_STREAM);
+        }
+        if (receiverQualifiedType.equals("org.springframework.web.util.HtmlUtils")
+                && methodName.equals("htmlEscape")
+                && arity == 1
+                && hasType(argumentQualifiedTypes, 0, "java.lang.String")) {
+            return Optional.of(KnownMethod.SPRING_HTML_ESCAPE);
+        }
         return Optional.empty();
     }
 
@@ -66,7 +89,11 @@ public final class KnownMethodReturnTypes {
         PATH_RESOLVE("java.nio.file.Path"),
         PATH_RECEIVER_TRANSFORM("java.nio.file.Path"),
         URI_CREATE("java.net.URI"),
-        URI_NORMALIZE("java.net.URI");
+        URI_NORMALIZE("java.net.URI"),
+        SERVLET_RESPONSE_GET_WRITER("java.io.PrintWriter"),
+        SERVLET_REQUEST_STRING_VALUE("java.lang.String"),
+        SERVLET_REQUEST_INPUT_STREAM("jakarta.servlet.ServletInputStream"),
+        SPRING_HTML_ESCAPE("java.lang.String");
 
         private final String returnType;
 
