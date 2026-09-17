@@ -34,7 +34,8 @@ public final class JavaNioPathMethodTaintModel implements MethodTaintModel {
                             SERVLET_RESPONSE_GET_WRITER,
                             SERVLET_REQUEST_STRING_VALUE,
                             SERVLET_REQUEST_INPUT_STREAM,
-                            SPRING_HTML_ESCAPE -> Optional.empty();
+                            SPRING_HTML_ESCAPE,
+                            MULTIPART_ORIGINAL_FILENAME -> Optional.empty();
                 });
     }
 }

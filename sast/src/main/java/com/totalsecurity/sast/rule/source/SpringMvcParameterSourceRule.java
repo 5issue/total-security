@@ -8,6 +8,8 @@ import java.util.Optional;
 
 public final class SpringMvcParameterSourceRule implements SourceRule {
     private static final String PACKAGE = "org.springframework.web.bind.annotation.";
+    public static final String REQUEST_PARAM_ID = "SPRING_MVC_REQUEST_PARAM";
+    public static final String REQUEST_PART_ID = "SPRING_MVC_REQUEST_PART";
 
     private final String id;
     private final String annotationFqn;
@@ -19,7 +21,8 @@ public final class SpringMvcParameterSourceRule implements SourceRule {
 
     public static List<SourceRule> defaults() {
         return List.of(
-                new SpringMvcParameterSourceRule("SPRING_MVC_REQUEST_PARAM", PACKAGE + "RequestParam"),
+                new SpringMvcParameterSourceRule(REQUEST_PARAM_ID, PACKAGE + "RequestParam"),
+                new SpringMvcParameterSourceRule(REQUEST_PART_ID, PACKAGE + "RequestPart"),
                 new SpringMvcParameterSourceRule("SPRING_MVC_PATH_VARIABLE", PACKAGE + "PathVariable"),
                 new SpringMvcParameterSourceRule("SPRING_MVC_REQUEST_BODY", PACKAGE + "RequestBody"),
                 new SpringMvcParameterSourceRule("SPRING_MVC_REQUEST_HEADER", PACKAGE + "RequestHeader"),

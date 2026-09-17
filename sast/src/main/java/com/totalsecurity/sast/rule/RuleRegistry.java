@@ -18,6 +18,7 @@ import com.totalsecurity.sast.rule.sink.JavaPrintWriterResponseBodySinkRule;
 import com.totalsecurity.sast.rule.sink.JavaRuntimeCommandSinkRule;
 import com.totalsecurity.sast.rule.sink.JavaNioFilesPathSinkRule;
 import com.totalsecurity.sast.rule.sink.SpringRestTemplateNetworkSinkRule;
+import com.totalsecurity.sast.rule.sink.SpringMultipartFileTransferSinkRule;
 import com.totalsecurity.sast.rule.sink.JndiLdapFilterSinkRule;
 import com.totalsecurity.sast.rule.sink.SinkMatch;
 import com.totalsecurity.sast.rule.sink.SinkRule;
@@ -25,6 +26,7 @@ import com.totalsecurity.sast.rule.source.ServletRequestSourceRule;
 import com.totalsecurity.sast.rule.source.SourceMatch;
 import com.totalsecurity.sast.rule.source.SourceRule;
 import com.totalsecurity.sast.rule.source.SpringMvcParameterSourceRule;
+import com.totalsecurity.sast.rule.source.SpringMultipartOriginalFilenameSourceRule;
 import com.totalsecurity.sast.taint.TaintSeed;
 import com.totalsecurity.sast.taint.model.JavaStringMethodTaintModel;
 import com.totalsecurity.sast.taint.model.JavaNioPathMethodTaintModel;
@@ -61,6 +63,7 @@ public final class RuleRegistry {
     public static RuleRegistry javaSpringBackendDefaults() {
         List<SourceRule> sources = new ArrayList<>(SpringMvcParameterSourceRule.defaults());
         sources.add(new ServletRequestSourceRule());
+        sources.add(new SpringMultipartOriginalFilenameSourceRule());
         return new RuleRegistry(
                 sources,
                 List.of(
@@ -73,7 +76,8 @@ public final class RuleRegistry {
                         new SpringRestTemplateNetworkSinkRule(),
                         new JndiLdapFilterSinkRule(),
                         new JakartaServletRedirectSinkRule(),
-                        new JavaPrintWriterResponseBodySinkRule()),
+                        new JavaPrintWriterResponseBodySinkRule(),
+                        new SpringMultipartFileTransferSinkRule()),
                 List.of(),
                 List.of(
                         new JavaStringMethodTaintModel(),

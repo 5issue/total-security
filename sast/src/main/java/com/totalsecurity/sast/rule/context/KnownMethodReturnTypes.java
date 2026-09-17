@@ -69,6 +69,11 @@ public final class KnownMethodReturnTypes {
                 && hasType(argumentQualifiedTypes, 0, "java.lang.String")) {
             return Optional.of(KnownMethod.SPRING_HTML_ESCAPE);
         }
+        if (receiverQualifiedType.equals("org.springframework.web.multipart.MultipartFile")
+                && methodName.equals("getOriginalFilename")
+                && arity == 0) {
+            return Optional.of(KnownMethod.MULTIPART_ORIGINAL_FILENAME);
+        }
         return Optional.empty();
     }
 
@@ -93,7 +98,8 @@ public final class KnownMethodReturnTypes {
         SERVLET_RESPONSE_GET_WRITER("java.io.PrintWriter"),
         SERVLET_REQUEST_STRING_VALUE("java.lang.String"),
         SERVLET_REQUEST_INPUT_STREAM("jakarta.servlet.ServletInputStream"),
-        SPRING_HTML_ESCAPE("java.lang.String");
+        SPRING_HTML_ESCAPE("java.lang.String"),
+        MULTIPART_ORIGINAL_FILENAME("java.lang.String");
 
         private final String returnType;
 
