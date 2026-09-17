@@ -10,7 +10,8 @@ public final class ServletRequestSourceRule implements SourceRule {
     private static final Map<String, Integer> METHODS = Map.of(
             "getParameter", 1,
             "getHeader", 1,
-            "getQueryString", 0);
+            "getQueryString", 0,
+            "getInputStream", 0);
 
     @Override
     public String id() {

@@ -2,7 +2,7 @@ package com.totalsecurity.sast.finding;
 
 import com.totalsecurity.sast.ir.SourceLocation;
 
-/** Common metadata exposed by flow and pattern findings. */
+/** Common metadata exposed by flow, configuration, pattern, and object-lineage findings. */
 public interface FindingResult {
     String ruleId();
 
