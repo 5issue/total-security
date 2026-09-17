@@ -98,9 +98,7 @@ public final class CallSiteContextResolver {
     public Optional<String> declaredTypeOf(Expression expression) {
         return switch (expression) {
             case VariableReference reference -> declaredTypeOf(reference);
-            case Literal literal -> literal.kind().equals("string_literal")
-                    ? Optional.of("String")
-                    : Optional.empty();
+            case Literal literal -> literalType(literal);
             case ObjectCreationExpression creation -> Optional.of(creation.typeName());
             case ParenthesizedExpression parenthesized -> declaredTypeOf(parenthesized.expression());
             case AssignmentExpression assignment -> declaredTypeOf(assignment.assignment().right());
@@ -123,6 +121,20 @@ public final class CallSiteContextResolver {
 
     public boolean isStringLike(Expression expression) {
         return qualifiedTypeOf(expression).filter("java.lang.String"::equals).isPresent();
+    }
+
+    private static Optional<String> literalType(Literal literal) {
+        if (literal.kind().equals("string_literal")) {
+            return Optional.of("String");
+        }
+        if (literal.kind().equals("true") || literal.kind().equals("false")) {
+            return Optional.of("boolean");
+        }
+        if (literal.kind().endsWith("integer_literal")) {
+            String source = literal.source();
+            return Optional.of(source.endsWith("l") || source.endsWith("L") ? "long" : "int");
+        }
+        return Optional.empty();
     }
 
     private Optional<String> declaredTypeOf(VariableReference reference) {

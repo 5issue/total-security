@@ -56,8 +56,29 @@ public final class TaintSinkFindingFactory {
             String cwe,
             FindingSeverity severity,
             EvidenceFactory evidenceFactory) {
+        return create(
+                analysis,
+                category,
+                ruleId,
+                vulnerabilityType,
+                cwe,
+                severity,
+                (ignoredAnalysis, ignoredSink, ignoredArgumentIndex) -> true,
+                evidenceFactory);
+    }
+
+    public static List<Finding> create(
+            RuleAwareTaintResult analysis,
+            SinkCategory category,
+            String ruleId,
+            String vulnerabilityType,
+            String cwe,
+            FindingSeverity severity,
+            SinkArgumentPredicate predicate,
+            EvidenceFactory evidenceFactory) {
         Objects.requireNonNull(analysis, "analysis");
         Objects.requireNonNull(category, "category");
+        Objects.requireNonNull(predicate, "predicate");
         Objects.requireNonNull(evidenceFactory, "evidenceFactory");
 
         LinkedHashMap<PhysicalSinkKey, List<SinkArgument>> candidates = new LinkedHashMap<>();
@@ -77,6 +98,10 @@ public final class TaintSinkFindingFactory {
             SinkArgument candidate = matches.stream()
                     .min(Comparator.comparing(item -> item.sink().ruleId()))
                     .orElseThrow();
+            if (!predicate.test(
+                    analysis, candidate.sink(), candidate.argumentIndex())) {
+                continue;
+            }
             TaintValue taint = analysis.sinkArgumentTaint(candidate.sink(), candidate.argumentIndex());
             if (taint.state() != TaintState.TAINTED) {
                 continue;
@@ -180,6 +205,7 @@ public final class TaintSinkFindingFactory {
             case FILESYSTEM_PATH -> "Filesystem path";
             case NETWORK_REQUEST_TARGET -> "Network request target";
             case LDAP_FILTER -> "LDAP filter";
+            case REDIRECT_TARGET -> "HTTP redirect target";
         };
         return subject + " argument " + argumentIndex + " of " + sink.call().call().methodName();
     }
@@ -274,6 +300,11 @@ public final class TaintSinkFindingFactory {
     @FunctionalInterface
     public interface EvidenceFactory {
         String create(SinkMatch sink, int argumentIndex);
+    }
+
+    @FunctionalInterface
+    public interface SinkArgumentPredicate {
+        boolean test(RuleAwareTaintResult analysis, SinkMatch sink, int argumentIndex);
     }
 
     private record PhysicalSinkKey(SourceLocation callLocation, int argumentIndex) {}

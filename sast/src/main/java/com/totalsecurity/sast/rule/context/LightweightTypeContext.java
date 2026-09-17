@@ -80,6 +80,9 @@ public final class LightweightTypeContext {
             value = value.substring(0, value.length() - 3).trim();
         }
         String suffix = "[]".repeat(dimensions);
+        if (isPrimitive(baseType(value))) {
+            return Optional.of(baseType(value) + suffix);
+        }
         return qualifyType(value).map(qualified -> qualified + suffix);
     }
 
