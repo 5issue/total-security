@@ -279,10 +279,11 @@ class CrossClassInterproceduralAnalysisTest {
     }
 
     @Test
-    void interfaceReceiverDoesNotSelectImplementation() {
-        assertUnsupported(CONTROLLER, "interfaceReceiver",
-                UnsupportedInterproceduralReason.INTERFACE_DISPATCH);
-        assertNoSourceFrom(CONTROLLER, "interfaceReceiver");
+    void uniqueInterfaceImplementationUsesSourceHierarchy() {
+        assertResolved(CONTROLLER, "interfaceReceiver",
+                "fixtures.crossclass.external.UserPortImpl", "sql");
+        findingFrom(CONTROLLER, "interfaceReceiver", REPOSITORY, "sql",
+                SinkCategory.SQL_TEXT);
     }
 
     @Test

@@ -29,6 +29,7 @@ Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java �
 - STEP 21: 실제 개발 중 snapshot을 이용한 unsupported coverage engineering audit. resolver 기능 자체를 추가한 단계는 아니다.
 - STEP 22/22B/22C: 보수적인 Java type qualification, assignability 및 overload resolution 정교화
 - STEP 23: top-level record/enum extraction과 source declaration으로 증명된 exact accessor/enum constant semantics
+- STEP 24: source hierarchy로 증명된 unique project interface 구현체에 한정한 보수적 dispatch
 
 이 엔진은 finding이 0개라는 사실을 대상이 안전하다는 증명으로 해석하지 않는다. parse/semantic failure와 지원하지 않는 호출 또는 구문은 별도로 보존하며, 지원 범위 밖의 의미를 추측해 성공한 분석으로 표시하지 않는다.
 
@@ -239,7 +240,7 @@ STEP 19 분석은 project 내에서 선언된 concrete class 간의 고신뢰 �
 
 - declared receiver type을 project class FQN으로 해석할 수 있어야 한다.
 - duplicate FQN class는 임의 선택하지 않는다.
-- interface receiver, runtime implementation 선택, runtime override dispatch 및 external class 내부 호출은 지원하지 않는다.
+- interface receiver는 STEP 24의 엄격한 unique source implementation 조건을 만족할 때만 지원한다. 일반 runtime implementation 선택, runtime override dispatch 및 external class 내부 호출은 지원하지 않는다.
 - target method name, arity와 보수적인 type compatibility를 확인한다.
 - 한 파일의 실패가 다른 file/class 분석을 중단시키지 않으며 unsupported call을 기록한다.
 
@@ -284,7 +285,7 @@ Type qualification 정책은 다음과 같다.
 - primitive narrowing이나 wrapper 간 임의 numeric conversion을 허용하지 않는다.
 - unresolved/external parent hierarchy를 추측하지 않는다.
 - hierarchy traversal은 cycle-safe이며 duplicate subtype, target supertype 또는 intermediate parent가 있으면 해당 proof를 중단한다.
-- hierarchy는 argument assignability에만 사용한다. interface implementation 선택이나 runtime dispatch에는 사용하지 않는다.
+- hierarchy는 argument assignability와 STEP 24의 제한적인 unique project interface implementation 증명에만 사용한다. 일반 runtime dispatch에는 사용하지 않는다.
 
 Generic type-variable array shape도 보존한다.
 
@@ -309,7 +310,19 @@ Top-level `record`와 `enum`을 class/interface와 구분된 project type으로 
 - source-declared enum constant field access는 해당 enum의 exact type을 유지한다. constant-specific class body가 있는 호출은 runtime override target을 선택하지 않고 unsupported dynamic dispatch로 남긴다.
 - duplicate FQN은 record accessor나 enum constant declaration을 임의 선택하지 않는다.
 
-Nested record/enum, compiler-generated `values()`/`valueOf()`, runtime interface implementation 및 runtime override dispatch는 STEP 23 지원 범위가 아니다.
+Nested record/enum, compiler-generated `values()`/`valueOf()` 및 runtime override dispatch는 STEP 23 지원 범위가 아니다. Interface dispatch는 아래 STEP 24 조건을 별도로 만족할 때만 지원한다.
+
+## STEP 24 unique project interface implementation dispatch
+
+Receiver가 duplicate가 아닌 exact unique project interface type에 bound된 instance value이고, 실제 source의 `extends`/`implements` hierarchy로 unique analyzable concrete class implementation이 정확히 하나임을 증명할 수 있을 때만 해당 implementation method를 target으로 사용한다. Abstract class는 concrete candidate에서 제외하며, target method에는 기존의 보수적 name/arity/type/overload 판정과 analyzable body 조건을 그대로 적용한다.
+
+- `@Service`, `@Repository`, `@Component`, `@Controller`, `@RestController` 같은 Spring annotation 자체는 dispatch 근거가 아니다.
+- Interface type-name/static-style receiver에는 unique implementation dispatch를 적용하지 않는다.
+- Spring Data/JPA repository marker hierarchy의 runtime proxy interface는 계속 unsupported다.
+- concrete implementation이 여러 개이거나 FQN/hierarchy가 duplicate 또는 ambiguous이면 임의 선택하지 않는다.
+- `@Primary`, `@Qualifier`, bean name 및 Spring container injection resolution은 지원하지 않는다.
+- interface default method, external superclass inherited method, runtime override 및 record/enum implementation dispatch는 추측하지 않는다.
+- resolve된 call은 기존 STEP 19 project summary와 5개 pure-taint category만 재사용하며, interface와 선택된 implementation 정보를 call provenance에 보존한다.
 
 ## 외부 경로 Project Runner
 
@@ -352,7 +365,7 @@ Pattern Analysis는 DataFlow/Taint vulnerability detector와 분리되어 있다
 - compiler-complete Java type checking과 generic type inference
 - Java overload specificity 전체
 - varargs invocation conversion
-- runtime interface implementation 선택
+- source hierarchy로 유일성을 증명할 수 없는 runtime interface implementation 선택
 - runtime override/virtual dispatch
 - external library hierarchy 추론
 - Reflection

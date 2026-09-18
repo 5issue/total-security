@@ -6,6 +6,7 @@ import java.util.Objects;
 public record ClassInfo(
         TypeKind kind,
         String name,
+        boolean abstractType,
         List<String> extendsTypes,
         List<String> implementsTypes,
         List<AnnotationInfo> annotations,
@@ -31,13 +32,28 @@ public record ClassInfo(
     public ClassInfo(
             TypeKind kind,
             String name,
+            boolean abstractType,
             List<String> extendsTypes,
             List<String> implementsTypes,
             List<AnnotationInfo> annotations,
             List<VariableInfo> fields,
             List<MethodInfo> methods,
             SourceLocation location) {
-        this(kind, name, extendsTypes, implementsTypes, annotations, fields, methods,
+        this(kind, name, abstractType, extendsTypes, implementsTypes, annotations, fields, methods,
+                List.of(), List.of(), location);
+    }
+
+    /** Compatibility constructor for non-abstract types without record/enum metadata. */
+    public ClassInfo(
+            TypeKind kind,
+            String name,
+            List<String> extendsTypes,
+            List<String> implementsTypes,
+            List<AnnotationInfo> annotations,
+            List<VariableInfo> fields,
+            List<MethodInfo> methods,
+            SourceLocation location) {
+        this(kind, name, false, extendsTypes, implementsTypes, annotations, fields, methods,
                 List.of(), List.of(), location);
     }
 
@@ -49,7 +65,7 @@ public record ClassInfo(
             List<VariableInfo> fields,
             List<MethodInfo> methods,
             SourceLocation location) {
-        this(kind, name, List.of(), List.of(), annotations, fields, methods,
+        this(kind, name, false, List.of(), List.of(), annotations, fields, methods,
                 List.of(), List.of(), location);
     }
 }

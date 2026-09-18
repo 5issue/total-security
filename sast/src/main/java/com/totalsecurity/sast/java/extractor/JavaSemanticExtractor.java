@@ -120,6 +120,7 @@ public final class JavaSemanticExtractor {
         return new ClassInfo(
                 kind,
                 name,
+                hasModifier(declaration, "abstract"),
                 extendsTypes,
                 implementsTypes,
                 annotations,
@@ -128,6 +129,21 @@ public final class JavaSemanticExtractor {
                 recordComponents,
                 enumConstants,
                 location(declaration));
+    }
+
+    private boolean hasModifier(TSNode declaration, String expected) {
+        for (TSNode child : namedChildren(declaration)) {
+            if (!child.getType().equals("modifiers")) {
+                continue;
+            }
+            for (int index = 0; index < child.getChildCount(); index++) {
+                TSNode modifier = child.getChild(index);
+                if (modifier.getType().equals(expected) || text(modifier).trim().equals(expected)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void extractTypeMembers(

@@ -17,10 +17,12 @@ import java.util.Optional;
 public final class CrossClassCallResolver {
     private final ProjectClassIndex index;
     private final ConservativeTypeCompatibility compatibility;
+    private final UniqueInterfaceImplementationResolver interfaceImplementations;
 
     public CrossClassCallResolver(ProjectClassIndex index) {
         this.index = Objects.requireNonNull(index, "index");
         this.compatibility = new ConservativeTypeCompatibility(index);
+        this.interfaceImplementations = new UniqueInterfaceImplementationResolver(index);
     }
 
     public ProjectCallResolution resolve(
@@ -109,15 +111,38 @@ public final class CrossClassCallResolver {
         }
 
         ProjectClassEntry owner = owners.getFirst();
+        Optional<InterfaceDispatchInfo> interfaceDispatch = Optional.empty();
         if (owner.type().kind() == TypeKind.INTERFACE) {
-            return unsupported(caller, call, UnsupportedInterproceduralReason.INTERFACE_DISPATCH,
-                    "Interface receiver implementations are not selected");
+            if (!context.receiverBoundToValue()) {
+                return unsupported(
+                        caller,
+                        call,
+                        UnsupportedInterproceduralReason.INTERFACE_DISPATCH,
+                        "Interface implementation dispatch requires a proven instance-value receiver");
+            }
+            ProjectClassEntry declaredInterface = owner;
+            UniqueInterfaceImplementationResolver.Selection selection =
+                    interfaceImplementations.select(declaredInterface);
+            if (selection.implementation().isEmpty()) {
+                return unsupported(
+                        caller,
+                        call,
+                        UnsupportedInterproceduralReason.INTERFACE_DISPATCH,
+                        selection.detail());
+            }
+            owner = selection.implementation().orElseThrow();
+            interfaceDispatch = Optional.of(new InterfaceDispatchInfo(
+                    declaredInterface.qualifiedName(), owner.qualifiedName()));
         }
         Optional<MethodInfo> target = resolveOverload(
                 owner, context, caller, call);
         if (target.isPresent()) {
             return resolvedIfAnalyzable(
-                    caller, call, owner.qualifiedName(), target.orElseThrow());
+                    caller,
+                    call,
+                    owner.qualifiedName(),
+                    target.orElseThrow(),
+                    interfaceDispatch);
         }
         return overloadFailure(owner, context, caller, call);
     }
@@ -309,10 +334,13 @@ public final class CrossClassCallResolver {
     }
 
     private static ProjectCallResolution resolved(
-            ProjectMethodId caller, MethodCallExpression call, ProjectMethodId target) {
+            ProjectMethodId caller,
+            MethodCallExpression call,
+            ProjectMethodId target,
+            Optional<InterfaceDispatchInfo> interfaceDispatch) {
         return new ProjectCallResolution(
                 caller, call, SameClassCallStatus.RESOLVED,
-                Optional.of(target), Optional.empty());
+                Optional.of(target), Optional.empty(), interfaceDispatch);
     }
 
     private static ProjectCallResolution modeled(
@@ -327,6 +355,16 @@ public final class CrossClassCallResolver {
             MethodCallExpression call,
             String ownerQualifiedName,
             MethodInfo target) {
+        return resolvedIfAnalyzable(
+                caller, call, ownerQualifiedName, target, Optional.empty());
+    }
+
+    private static ProjectCallResolution resolvedIfAnalyzable(
+            ProjectMethodId caller,
+            MethodCallExpression call,
+            String ownerQualifiedName,
+            MethodInfo target,
+            Optional<InterfaceDispatchInfo> interfaceDispatch) {
         if (target.body().isEmpty()) {
             return unsupported(
                     caller,
@@ -335,7 +373,11 @@ public final class CrossClassCallResolver {
                     "Project-local target " + ownerQualifiedName + "#" + target.name()
                             + " has no analyzable method body");
         }
-        return resolved(caller, call, new ProjectMethodId(ownerQualifiedName, target));
+        return resolved(
+                caller,
+                call,
+                new ProjectMethodId(ownerQualifiedName, target),
+                interfaceDispatch);
     }
 
     private static ProjectCallResolution unsupported(

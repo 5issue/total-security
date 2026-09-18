@@ -431,7 +431,8 @@ public final class CrossClassInterproceduralAnalysis {
                         callerIndexes.add(callerIndex);
                         List<FindingFlowStep> steps = new ArrayList<>(
                                 InterproceduralFlowSupport.syntheticFlowTo(taint, argument, origin));
-                        steps.add(callStep(method, target, resolution.call().location()));
+                        steps.add(callStep(
+                                method, target, resolution.call().location(), resolution));
                         steps.add(bindingStep(target, calleeIndex));
                         steps.addAll(nested.parameterFlows().getOrDefault(calleeIndex, List.of()));
                         flows.putIfAbsent(callerIndex, List.copyOf(steps));
@@ -485,7 +486,10 @@ public final class CrossClassInterproceduralAnalysis {
                                 InterproceduralFlowSupport.flowTo(
                                         callerAnalysis.taintResult(), argument, origin, source));
                         steps.add(callStep(
-                                resolution.caller(), targetId, resolution.call().location()));
+                                resolution.caller(),
+                                targetId,
+                                resolution.call().location(),
+                                resolution));
                         steps.add(bindingStep(targetId, parameterIndex));
                         steps.addAll(dependency.parameterFlows()
                                 .getOrDefault(parameterIndex, List.of()));
@@ -561,7 +565,7 @@ public final class CrossClassInterproceduralAnalysis {
                             taint, boundary.call(), origin,
                             summary.returnDependency().parameterIndexes());
                     if (parameterIndex >= 0) {
-                        expanded.add(callStep(method, target, step.location()));
+                        expanded.add(callStep(method, target, step.location(), boundary));
                         expanded.add(bindingStep(target, parameterIndex));
                         expanded.addAll(summary.returnDependency().parameterFlows()
                                 .getOrDefault(parameterIndex, List.of()));
@@ -594,11 +598,19 @@ public final class CrossClassInterproceduralAnalysis {
     }
 
     private FindingFlowStep callStep(
-            ProjectMethodId caller, ProjectMethodId callee, SourceLocation location) {
+            ProjectMethodId caller,
+            ProjectMethodId callee,
+            SourceLocation location,
+            ProjectCallResolution resolution) {
         String summary = qualifyBoundaryOwners || !caller.ownerQualifiedName()
                 .equals(callee.ownerQualifiedName())
                 ? "Project call " + caller.boundaryName() + " -> " + callee.boundaryName()
                 : "Same-class call " + caller.method().name() + " -> " + callee.method().name();
+        if (resolution.interfaceDispatch().isPresent()) {
+            InterfaceDispatchInfo dispatch = resolution.interfaceDispatch().orElseThrow();
+            summary += " (declared interface " + dispatch.declaredInterface()
+                    + " resolved to " + dispatch.resolvedImplementation() + ")";
+        }
         return new FindingFlowStep(FindingFlowStepKind.METHOD_CALL, location, summary);
     }
 

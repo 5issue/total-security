@@ -69,6 +69,19 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
         return isDeclaredSubtypeOf(subtype, supertype, new LinkedHashSet<>());
     }
 
+    /**
+     * Proves a relationship from one exact source declaration. Duplicate intermediate
+     * declarations still stop the proof.
+     */
+    boolean isDeclaredSubtypeOf(ProjectClassEntry subtype, String supertype) {
+        Objects.requireNonNull(subtype, "subtype");
+        Objects.requireNonNull(supertype, "supertype");
+        if (isAmbiguousProjectType(supertype)) {
+            return false;
+        }
+        return isDeclaredSubtypeOf(subtype, supertype, new LinkedHashSet<>());
+    }
+
     public List<ProjectClassEntry> classesNamed(String simpleName) {
         return bySimpleName.getOrDefault(simpleName, List.of());
     }
@@ -78,6 +91,11 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
                 .filter(entries -> entries.size() == 1)
                 .map(List::getFirst)
                 .toList();
+    }
+
+    /** All source declarations, including duplicate FQNs, in discovery order. */
+    public List<ProjectClassEntry> entries() {
+        return byQualifiedName.values().stream().flatMap(List::stream).toList();
     }
 
     public Set<String> ambiguousQualifiedNames() {
@@ -123,6 +141,26 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
                 .flatMap(Optional::stream)
                 .anyMatch(parent -> parent.equals(supertype)
                         || isDeclaredSubtypeOf(parent, supertype, visited));
+    }
+
+    private boolean isDeclaredSubtypeOf(
+            ProjectClassEntry subtype, String supertype, Set<String> visited) {
+        if (subtype.qualifiedName().equals(supertype)) {
+            return true;
+        }
+        if (!visited.add(subtype.qualifiedName())) {
+            return false;
+        }
+        LightweightTypeContext types = new LightweightTypeContext(subtype.file(), this::contains);
+        return java.util.stream.Stream.concat(
+                        subtype.type().extendsTypes().stream(),
+                        subtype.type().implementsTypes().stream())
+                .map(types::qualifyTypeShape)
+                .flatMap(Optional::stream)
+                .anyMatch(parent -> parent.equals(supertype)
+                        || uniqueClass(parent)
+                                .map(entry -> isDeclaredSubtypeOf(entry, supertype, visited))
+                                .orElse(false));
     }
 
     private boolean isAmbiguousProjectType(String qualifiedName) {
