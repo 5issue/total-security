@@ -34,6 +34,7 @@ import com.totalsecurity.sast.taint.model.JavaUriMethodTaintModel;
 import com.totalsecurity.sast.taint.model.MethodTaintModel;
 import com.totalsecurity.sast.taint.model.MethodTaintModelRegistry;
 import com.totalsecurity.sast.taint.model.MethodTaintSemanticsProvider;
+import com.totalsecurity.sast.taint.model.RecordAccessorMethodTaintModel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -80,6 +81,7 @@ public final class RuleRegistry {
                         new SpringMultipartFileTransferSinkRule()),
                 List.of(),
                 List.of(
+                        new RecordAccessorMethodTaintModel(),
                         new JavaStringMethodTaintModel(),
                         new JavaNioPathMethodTaintModel(),
                         new JavaUriMethodTaintModel()));

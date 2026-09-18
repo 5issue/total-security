@@ -29,6 +29,15 @@ public final class CrossClassCallResolver {
             MethodCallExpression call,
             CallSiteContextResolver contexts) {
         CallSiteContext context = contexts.resolve(call);
+        if (context.recordAccessor().isPresent()) {
+            return modeled(caller, call);
+        }
+        if (context.enumConstantReceiver()
+                .filter(reference -> reference.constant().constantSpecificClassBody())
+                .isPresent()) {
+            return unsupported(caller, call, UnsupportedInterproceduralReason.DYNAMIC_RECEIVER,
+                    "Enum constant-specific class body requires runtime override dispatch");
+        }
         if (isSameClassSyntax(context, callerType)) {
             Optional<SameClassCallResolution> same = new SameClassCallResolver(
                     callerType.file(), callerType.type(), index)
@@ -304,6 +313,13 @@ public final class CrossClassCallResolver {
         return new ProjectCallResolution(
                 caller, call, SameClassCallStatus.RESOLVED,
                 Optional.of(target), Optional.empty());
+    }
+
+    private static ProjectCallResolution modeled(
+            ProjectMethodId caller, MethodCallExpression call) {
+        return new ProjectCallResolution(
+                caller, call, SameClassCallStatus.MODELED,
+                Optional.empty(), Optional.empty());
     }
 
     private static ProjectCallResolution resolvedIfAnalyzable(

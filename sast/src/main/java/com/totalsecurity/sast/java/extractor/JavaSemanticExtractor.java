@@ -3,12 +3,14 @@ package com.totalsecurity.sast.java.extractor;
 import com.totalsecurity.sast.ir.AnnotationInfo;
 import com.totalsecurity.sast.ir.AssignmentInfo;
 import com.totalsecurity.sast.ir.ClassInfo;
+import com.totalsecurity.sast.ir.EnumConstantInfo;
 import com.totalsecurity.sast.ir.JavaFileInfo;
 import com.totalsecurity.sast.ir.MethodCallInfo;
 import com.totalsecurity.sast.ir.MethodInfo;
 import com.totalsecurity.sast.ir.MethodKind;
 import com.totalsecurity.sast.ir.ParameterInfo;
 import com.totalsecurity.sast.ir.ReturnInfo;
+import com.totalsecurity.sast.ir.RecordComponentInfo;
 import com.totalsecurity.sast.ir.SourceLocation;
 import com.totalsecurity.sast.ir.TypeKind;
 import com.totalsecurity.sast.ir.TypeParameterInfo;
@@ -67,8 +69,10 @@ public final class JavaSemanticExtractor {
                 case "import_declaration" -> imports.add(extractImport(child));
                 case "class_declaration" -> types.add(extractType(child, TypeKind.CLASS));
                 case "interface_declaration" -> types.add(extractType(child, TypeKind.INTERFACE));
+                case "record_declaration" -> types.add(extractType(child, TypeKind.RECORD));
+                case "enum_declaration" -> types.add(extractType(child, TypeKind.ENUM));
                 default -> {
-                    // STEP 2 intentionally supports only classes and interfaces as top-level types.
+                    // Nested and unsupported top-level declarations remain outside this step.
                 }
             }
         }
@@ -96,19 +100,20 @@ public final class JavaSemanticExtractor {
         List<AnnotationInfo> annotations = extractAnnotations(declaration);
         List<VariableInfo> fields = new ArrayList<>();
         List<MethodInfo> methods = new ArrayList<>();
+        List<RecordComponentInfo> recordComponents = kind == TypeKind.RECORD
+                ? field(declaration, "parameters")
+                        .map(this::extractRecordComponents)
+                        .orElseGet(List::of)
+                : List.of();
+        List<EnumConstantInfo> enumConstants = new ArrayList<>();
 
         field(declaration, "body").ifPresent(body -> {
-            for (TSNode member : namedChildren(body)) {
-                switch (member.getType()) {
-                    case "field_declaration" ->
-                            fields.addAll(extractVariables(member, VariableKind.FIELD));
-                    case "method_declaration" -> methods.add(extractMethod(member, MethodKind.METHOD));
-                    case "constructor_declaration" ->
-                            methods.add(extractMethod(member, MethodKind.CONSTRUCTOR));
-                    default -> {
-                        // Nested types and initializer blocks are outside this extraction step.
-                    }
-                }
+            extractTypeMembers(body, fields, methods);
+            if (kind == TypeKind.ENUM) {
+                namedChildren(body).stream()
+                        .filter(member -> member.getType().equals("enum_constant"))
+                        .map(this::extractEnumConstant)
+                        .forEach(enumConstants::add);
             }
         });
 
@@ -120,7 +125,45 @@ public final class JavaSemanticExtractor {
                 annotations,
                 fields,
                 methods,
+                recordComponents,
+                enumConstants,
                 location(declaration));
+    }
+
+    private void extractTypeMembers(
+            TSNode body, List<VariableInfo> fields, List<MethodInfo> methods) {
+        for (TSNode member : namedChildren(body)) {
+            switch (member.getType()) {
+                case "field_declaration" ->
+                        fields.addAll(extractVariables(member, VariableKind.FIELD));
+                case "method_declaration" -> methods.add(extractMethod(member, MethodKind.METHOD));
+                case "constructor_declaration" ->
+                        methods.add(extractMethod(member, MethodKind.CONSTRUCTOR));
+                case "enum_body_declarations" -> extractTypeMembers(member, fields, methods);
+                default -> {
+                    // Nested types, enum constants and initializer blocks are handled elsewhere
+                    // or intentionally remain outside this extraction step.
+                }
+            }
+        }
+    }
+
+    private List<RecordComponentInfo> extractRecordComponents(TSNode parameters) {
+        return namedChildren(parameters).stream()
+                .filter(component -> component.getType().equals("formal_parameter"))
+                .map(component -> new RecordComponentInfo(
+                        field(component, "name").map(this::text).orElse("<unnamed>"),
+                        field(component, "type").map(this::text).orElse("<unknown>"),
+                        extractAnnotations(component),
+                        location(component)))
+                .toList();
+    }
+
+    private EnumConstantInfo extractEnumConstant(TSNode constant) {
+        String name = field(constant, "name").map(this::text).orElse("<unnamed>");
+        boolean classBody = namedChildren(constant).stream()
+                .anyMatch(child -> child.getType().equals("class_body"));
+        return new EnumConstantInfo(name, classBody, location(constant));
     }
 
     private MethodInfo extractMethod(TSNode declaration, MethodKind kind) {

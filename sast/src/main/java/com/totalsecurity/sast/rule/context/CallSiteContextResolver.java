@@ -6,6 +6,8 @@ import com.totalsecurity.sast.ir.AssignmentInfo;
 import com.totalsecurity.sast.ir.ClassInfo;
 import com.totalsecurity.sast.ir.JavaFileInfo;
 import com.totalsecurity.sast.ir.MethodInfo;
+import com.totalsecurity.sast.ir.MethodKind;
+import com.totalsecurity.sast.ir.TypeKind;
 import com.totalsecurity.sast.ir.VariableInfo;
 import com.totalsecurity.sast.ir.expression.AssignmentExpression;
 import com.totalsecurity.sast.ir.expression.BinaryExpression;
@@ -44,13 +46,14 @@ public final class CallSiteContextResolver {
     private final MethodInfo enclosingMethod;
     private final DataFlowResult dataFlow;
     private final LightweightTypeContext types;
+    private final ProjectTypeLookup projectTypes;
 
     public CallSiteContextResolver(
             JavaFileInfo file,
             ClassInfo enclosingClass,
             MethodInfo enclosingMethod,
             DataFlowResult dataFlow) {
-        this(file, enclosingClass, enclosingMethod, dataFlow, ignored -> false);
+        this(file, enclosingClass, enclosingMethod, dataFlow, ProjectTypeLookup.none());
     }
 
     public CallSiteContextResolver(
@@ -59,6 +62,16 @@ public final class CallSiteContextResolver {
             MethodInfo enclosingMethod,
             DataFlowResult dataFlow,
             Predicate<String> projectTypeExists) {
+        this(file, enclosingClass, enclosingMethod, dataFlow,
+                ProjectTypeLookup.existenceOnly(projectTypeExists));
+    }
+
+    public CallSiteContextResolver(
+            JavaFileInfo file,
+            ClassInfo enclosingClass,
+            MethodInfo enclosingMethod,
+            DataFlowResult dataFlow,
+            ProjectTypeLookup projectTypes) {
         this.file = Objects.requireNonNull(file, "file");
         this.enclosingClass = Objects.requireNonNull(enclosingClass, "enclosingClass");
         this.enclosingMethod = Objects.requireNonNull(enclosingMethod, "enclosingMethod");
@@ -66,7 +79,8 @@ public final class CallSiteContextResolver {
         if (!dataFlow.graph().method().equals(enclosingMethod)) {
             throw new IllegalArgumentException("DataFlowResult belongs to a different method");
         }
-        this.types = new LightweightTypeContext(file, projectTypeExists);
+        this.projectTypes = Objects.requireNonNull(projectTypes, "projectTypes");
+        this.types = new LightweightTypeContext(file, projectTypes::contains);
     }
 
     public LightweightTypeContext types() {
@@ -77,6 +91,9 @@ public final class CallSiteContextResolver {
         Objects.requireNonNull(call, "call");
         Optional<String> declaredType = call.call().receiver().flatMap(this::declaredReceiverTypeOf);
         Optional<String> qualifiedType = declaredType.flatMap(types::qualifyType);
+        Optional<RecordAccessorInfo> recordAccessor = exactRecordAccessor(call);
+        Optional<EnumConstantReferenceInfo> enumConstantReceiver =
+                call.call().receiver().flatMap(this::exactEnumConstant);
         return new CallSiteContext(
                 file,
                 enclosingClass,
@@ -85,6 +102,8 @@ public final class CallSiteContextResolver {
                 call.call().receiver(),
                 declaredType,
                 qualifiedType,
+                recordAccessor,
+                enumConstantReceiver,
                 call.call().receiver().map(this::isValueReceiver).orElse(false),
                 call.call().methodName(),
                 call.call().arguments(),
@@ -171,7 +190,7 @@ public final class CallSiteContextResolver {
                     .map(VariableInfo::type)
                     .findFirst();
         }
-        return Optional.empty();
+        return exactEnumConstant(field).map(EnumConstantReferenceInfo::ownerQualifiedName);
     }
 
     private Optional<String> knownMethodReturnType(MethodCallExpression call) {
@@ -179,12 +198,117 @@ public final class CallSiteContextResolver {
         if (receiverType.isEmpty()) {
             return Optional.empty();
         }
+        Optional<ProjectTypeDeclaration> owner = uniqueType(receiverType.orElseThrow());
+        if (owner.isPresent() && owner.orElseThrow().type().kind() == TypeKind.RECORD
+                && call.call().arguments().isEmpty()) {
+            ProjectTypeDeclaration record = owner.orElseThrow();
+            List<MethodInfo> explicit = record.type().methods().stream()
+                    .filter(method -> method.kind() == MethodKind.METHOD)
+                    .filter(method -> method.name().equals(call.call().methodName()))
+                    .filter(method -> method.parameters().isEmpty())
+                    .toList();
+            if (explicit.size() == 1) {
+                return explicit.getFirst().returnType()
+                        .flatMap(type -> ownerTypes(record).qualifyTypeShape(type));
+            }
+            if (!explicit.isEmpty()) {
+                return Optional.empty();
+            }
+            Optional<RecordAccessorInfo> accessor = exactRecordAccessor(call);
+            if (accessor.isPresent()) {
+                return accessor.map(RecordAccessorInfo::qualifiedReturnType);
+            }
+        }
         List<Optional<String>> argumentTypes = call.call().arguments().stream()
                 .map(this::qualifiedTypeShapeOf)
                 .toList();
         return KnownMethodReturnTypes.match(
                         receiverType.orElseThrow(), call.call().methodName(), argumentTypes)
                 .map(KnownMethodReturnTypes.KnownMethod::returnType);
+    }
+
+    private Optional<RecordAccessorInfo> exactRecordAccessor(MethodCallExpression call) {
+        if (call.call().arguments().size() != 0
+                || call.call().receiver().isEmpty()
+                || call.call().receiver().filter(this::isValueReceiver).isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<String> receiverType = call.call().receiver().flatMap(this::qualifiedReceiverTypeOf);
+        if (receiverType.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<ProjectTypeDeclaration> owner = uniqueType(receiverType.orElseThrow());
+        if (owner.isEmpty() || owner.orElseThrow().type().kind() != TypeKind.RECORD) {
+            return Optional.empty();
+        }
+        ProjectTypeDeclaration record = owner.orElseThrow();
+        boolean explicit = record.type().methods().stream()
+                .filter(method -> method.kind() == MethodKind.METHOD)
+                .anyMatch(method -> method.name().equals(call.call().methodName())
+                        && method.parameters().isEmpty());
+        if (explicit) {
+            return Optional.empty();
+        }
+        return record.type().recordComponents().stream()
+                .filter(component -> component.name().equals(call.call().methodName()))
+                .findFirst()
+                .flatMap(component -> ownerTypes(record)
+                        .qualifyTypeShape(component.declaredType())
+                        .map(returnType -> new RecordAccessorInfo(
+                                record.qualifiedName(), returnType, component)));
+    }
+
+    private Optional<EnumConstantReferenceInfo> exactEnumConstant(Expression expression) {
+        if (!(expression instanceof FieldAccessExpression field)
+                || !(field.target() instanceof VariableReference ownerReference)
+                || isValueReference(ownerReference)) {
+            return Optional.empty();
+        }
+        Optional<String> ownerName = types.qualifyType(ownerReference.name());
+        if (ownerName.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<ProjectTypeDeclaration> owner = uniqueType(ownerName.orElseThrow());
+        if (owner.isEmpty() || owner.orElseThrow().type().kind() != TypeKind.ENUM) {
+            return Optional.empty();
+        }
+        ProjectTypeDeclaration enumType = owner.orElseThrow();
+        return enumType.type().enumConstants().stream()
+                .filter(constant -> constant.name().equals(field.fieldName()))
+                .findFirst()
+                .map(constant -> new EnumConstantReferenceInfo(
+                        enumType.qualifiedName(), constant));
+    }
+
+    private Optional<ProjectTypeDeclaration> uniqueType(String qualifiedName) {
+        List<ProjectTypeDeclaration> declarations = projectTypes.declarations(qualifiedName);
+        if (declarations.size() == 1) {
+            return Optional.of(declarations.getFirst());
+        }
+        if (declarations.size() > 1) {
+            return Optional.empty();
+        }
+        List<ProjectTypeDeclaration> local = file.types().stream()
+                .filter(type -> localQualifiedName(type).equals(qualifiedName))
+                .map(type -> new ProjectTypeDeclaration(qualifiedName, file, type))
+                .toList();
+        return local.size() == 1 ? Optional.of(local.getFirst()) : Optional.empty();
+    }
+
+    private LightweightTypeContext ownerTypes(ProjectTypeDeclaration owner) {
+        return new LightweightTypeContext(owner.file(), projectTypes::contains);
+    }
+
+    private String localQualifiedName(ClassInfo type) {
+        return file.packageName().map(name -> name + "." + type.name()).orElse(type.name());
+    }
+
+    private boolean isValueReference(VariableReference reference) {
+        if (dataFlow.resolvedSymbol(reference).isPresent()) {
+            return true;
+        }
+        return enclosingClass.fields().stream()
+                .anyMatch(field -> field.name().equals(reference.name()));
     }
 
     private Optional<String> declaredReceiverTypeOf(Expression receiver) {

@@ -22,5 +22,9 @@ public record ProjectCallResolution(
         if ((status == SameClassCallStatus.UNSUPPORTED) != unsupported.isPresent()) {
             throw new IllegalArgumentException("Unsupported calls require a reason");
         }
+        if (status == SameClassCallStatus.MODELED
+                && (target.isPresent() || unsupported.isPresent())) {
+            throw new IllegalArgumentException("Modeled calls have no method target or unsupported reason");
+        }
     }
 }

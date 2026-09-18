@@ -19,6 +19,8 @@ public record CallSiteContext(
         Optional<Expression> receiver,
         Optional<String> receiverDeclaredType,
         Optional<String> receiverQualifiedType,
+        Optional<RecordAccessorInfo> recordAccessor,
+        Optional<EnumConstantReferenceInfo> enumConstantReceiver,
         boolean receiverBoundToValue,
         String methodName,
         List<Expression> arguments,
@@ -33,6 +35,8 @@ public record CallSiteContext(
         receiver = Objects.requireNonNull(receiver, "receiver");
         receiverDeclaredType = Objects.requireNonNull(receiverDeclaredType, "receiverDeclaredType");
         receiverQualifiedType = Objects.requireNonNull(receiverQualifiedType, "receiverQualifiedType");
+        recordAccessor = Objects.requireNonNull(recordAccessor, "recordAccessor");
+        enumConstantReceiver = Objects.requireNonNull(enumConstantReceiver, "enumConstantReceiver");
         Objects.requireNonNull(methodName, "methodName");
         arguments = List.copyOf(arguments);
         argumentQualifiedTypes = List.copyOf(argumentQualifiedTypes);

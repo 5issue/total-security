@@ -3,6 +3,8 @@ package com.totalsecurity.sast.interprocedural;
 import com.totalsecurity.sast.ir.ClassInfo;
 import com.totalsecurity.sast.ir.JavaFileInfo;
 import com.totalsecurity.sast.rule.context.LightweightTypeContext;
+import com.totalsecurity.sast.rule.context.ProjectTypeDeclaration;
+import com.totalsecurity.sast.rule.context.ProjectTypeLookup;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -15,7 +17,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /** Project-local FQN index. Duplicate FQNs remain ambiguous and are never selected. */
-public final class ProjectClassIndex {
+public final class ProjectClassIndex implements ProjectTypeLookup {
     private final Map<String, List<ProjectClassEntry>> byQualifiedName;
     private final Map<String, List<ProjectClassEntry>> bySimpleName;
 
@@ -47,6 +49,14 @@ public final class ProjectClassIndex {
 
     public boolean contains(String qualifiedName) {
         return !candidates(qualifiedName).isEmpty();
+    }
+
+    @Override
+    public List<ProjectTypeDeclaration> declarations(String qualifiedName) {
+        return candidates(qualifiedName).stream()
+                .map(entry -> new ProjectTypeDeclaration(
+                        entry.qualifiedName(), entry.file(), entry.type()))
+                .toList();
     }
 
     /** Exact, project-local declared subtype traversal. Duplicate or unresolved types stop proof. */
