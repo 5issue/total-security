@@ -2,6 +2,7 @@ package com.totalsecurity.sast.interprocedural;
 
 import com.totalsecurity.sast.ir.ClassInfo;
 import com.totalsecurity.sast.ir.JavaFileInfo;
+import com.totalsecurity.sast.rule.context.LightweightTypeContext;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -44,6 +45,20 @@ public final class ProjectClassIndex {
         return candidates.size() == 1 ? Optional.of(candidates.getFirst()) : Optional.empty();
     }
 
+    public boolean contains(String qualifiedName) {
+        return !candidates(qualifiedName).isEmpty();
+    }
+
+    /** Exact, project-local declared subtype traversal. Duplicate or unresolved types stop proof. */
+    public boolean isDeclaredSubtypeOf(String subtype, String supertype) {
+        Objects.requireNonNull(subtype, "subtype");
+        Objects.requireNonNull(supertype, "supertype");
+        if (isAmbiguousProjectType(subtype) || isAmbiguousProjectType(supertype)) {
+            return false;
+        }
+        return isDeclaredSubtypeOf(subtype, supertype, new LinkedHashSet<>());
+    }
+
     public List<ProjectClassEntry> classesNamed(String simpleName) {
         return bySimpleName.getOrDefault(simpleName, List.of());
     }
@@ -72,6 +87,36 @@ public final class ProjectClassIndex {
 
     public static String qualifiedName(JavaFileInfo file, ClassInfo type) {
         return file.packageName().map(name -> name + "." + type.name()).orElse(type.name());
+    }
+
+    private boolean isDeclaredSubtypeOf(
+            String subtype, String supertype, Set<String> visited) {
+        if (isAmbiguousProjectType(subtype)) {
+            return false;
+        }
+        if (subtype.equals(supertype)) {
+            return true;
+        }
+        if (!visited.add(subtype)) {
+            return false;
+        }
+        Optional<ProjectClassEntry> entry = uniqueClass(subtype);
+        if (entry.isEmpty()) {
+            return false;
+        }
+        ProjectClassEntry current = entry.orElseThrow();
+        LightweightTypeContext types = new LightweightTypeContext(current.file(), this::contains);
+        return java.util.stream.Stream.concat(
+                        current.type().extendsTypes().stream(),
+                        current.type().implementsTypes().stream())
+                .map(types::qualifyTypeShape)
+                .flatMap(Optional::stream)
+                .anyMatch(parent -> parent.equals(supertype)
+                        || isDeclaredSubtypeOf(parent, supertype, visited));
+    }
+
+    private boolean isAmbiguousProjectType(String qualifiedName) {
+        return candidates(qualifiedName).size() > 1;
     }
 
     private static Map<String, List<ProjectClassEntry>> immutableLists(

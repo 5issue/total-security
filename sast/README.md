@@ -1,237 +1,382 @@
-# Total Security SAST
+# Total Security 경량 Java/Spring SAST
+
+이 디렉터리는 Java 25와 Spring Boot 백엔드를 초기 대상으로 하는 경량 SAST 엔진이다. 분석 파이프라인은 다음 계층을 명시적으로 분리한다.
+
+```text
+Java source
+→ Tree-sitter Java parsing
+→ Tree-sitter-independent Java IR
+→ method-level CFG
+→ DataFlow
+→ Taint
+→ environment-specific Source/Sink/Sanitizer rules
+→ Finding
+```
 
-STEP 1 provides Java source parsing and concrete syntax tree inspection. STEP 2 adds a Java-specific semantic extractor and a Tree-sitter-independent Java IR. STEP 2B adds an ordered statement hierarchy to method bodies. STEP 3 builds method-level control-flow graphs from that IR without accessing Tree-sitter nodes. STEP 4 adds intraprocedural flow-sensitive reaching-definitions analysis over the IR and CFG. STEP 5 adds intraprocedural flow-sensitive taint propagation over those reaching definitions. STEP 6 adds Java/Spring rule matching and injectable method-call taint semantics. STEP 6B makes model precedence explicit and provides rule-aware taint orchestration. STEP 7 adds the first vulnerability detector and produces evidence-backed SQL Injection (CWE-89) findings for supported flows. STEP 8 adds an independent Java IR pattern-analysis path and its first Hardcoded Credential (CWE-798) detector. STEP 9 adds OS Command Injection (CWE-78) findings for supported `java.lang.Runtime.exec` String-command flows. STEP 10 adds Path Traversal (CWE-22) findings for supported `java.nio.file.Files` Path arguments. STEP 11 adds SSRF (CWE-918) findings for supported Spring `RestTemplate` String/URI request targets. STEP 12 adds LDAP Injection (CWE-90) findings for supported JNDI directory-search filter arguments. STEP 13 adds configuration-aware XML External Entity (CWE-611) findings for explicitly unsafe supported JAXP DOM factory-to-parser flows. STEP 14 adds high-confidence Open Redirect (CWE-601) findings when supported external input controls the full or prefix portion of a Jakarta Servlet redirect target. STEP 15 adds Java Native Insecure Deserialization (CWE-502) findings when supported external input constructs a Java `ObjectInputStream` that is subsequently used by `readObject` in the same method. STEP 16 adds reflected/output Cross-Site Scripting (CWE-79) findings for raw external input written through a proven Jakarta servlet HTML response writer. STEP 17 adds high-confidence Unrestricted File Upload (CWE-434) findings for supported Spring `MultipartFile.transferTo` flows whose final stored filename extension remains attacker-controlled. STEP 18 adds same-class interprocedural taint summaries for directly resolved acyclic method calls. STEP 19 extends the same summary engine to exact project-local cross-class calls. STEP 20 adds an external-path Project Runner and minimal console CLI. Java parsing uses Tree-sitter with the official Java grammar packaged for the Java binding.
+Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java 의미 추출기는 syntax tree에서 class, method, parameter, variable, assignment, method invocation, return, annotation 및 statement 구조를 추출해 자체 IR로 변환한다. CFG, DataFlow, Taint, rule 및 Finding 계층은 `TSNode`, `TSTree`, `org.treesitter` 타입이나 Tree-sitter node type 문자열에 직접 의존하지 않는다.
 
-The extractor currently preserves package/import declarations, classes, interfaces, methods, constructors, parameters, fields, local variables, assignments, method calls, returns, and annotations. Expressions are represented structurally as variable references, literals, binary and assignment expressions, method calls, object creation, field access, parenthesized expressions, or explicit unknown expressions.
+현재 구현은 STEP 1~22의 범위다.
 
-Concrete method and constructor bodies contain ordered `Statement` IR. The current statement variants are blocks, variable declarations, expression statements, returns, if/else, while, do-while, classic for, enhanced for, switch cases, break, continue, throw, and explicit unknown statements. Every statement retains a `SourceLocation`.
+- STEP 1: Tree-sitter Java parsing 및 syntax tree 순회
+- STEP 2/2B: Java 의미 추출, Expression IR, lexical/structural 순서를 보존하는 ordered Statement IR
+- STEP 3: 메서드 단위 CFG
+- STEP 4: 동일 메서드 내부 DataFlow와 reaching definitions
+- STEP 5/6/6B: 동일 메서드 내부 Taint, Java/Spring Source/Sink/Sanitizer rule, 명시적 MethodTaintModel 우선순위와 rule-aware orchestration
+- STEP 7~17: 지원 취약점 Finding 및 Pattern Analysis
+- STEP 18: same-class interprocedural pure-taint 분석
+- STEP 19: project-local cross-class interprocedural pure-taint 분석
+- STEP 20: 외부 Java/Spring 프로젝트를 읽기 전용으로 분석하는 Project Runner와 CLI
+- STEP 21: 실제 개발 중 snapshot을 이용한 unsupported coverage engineering audit. resolver 기능 자체를 추가한 단계는 아니다.
+- STEP 22/22B/22C: 보수적인 Java type qualification, assignability 및 overload resolution 정교화
 
-The IR does not assign Spring or security meaning to annotations or API names.
+이 엔진은 finding이 0개라는 사실을 대상이 안전하다는 증명으로 해석하지 않는다. parse/semantic failure와 지원하지 않는 호출 또는 구문은 별도로 보존하며, 지원 범위 밖의 의미를 추측해 성공한 분석으로 표시하지 않는다.
 
-## Method-level CFG
+## Java parsing과 의미 IR
 
-`ControlFlowGraphBuilder` groups consecutive straight-line statements into basic blocks and splits at branch, loop, switch, and terminating control transfers. Graph edges distinguish normal flow, true/false branches, loop back-edges, break, continue, return, throw, and switch case/default dispatch. Nested loop and switch targets are resolved with an explicit control-context stack.
+`JavaSourceParser`는 UTF-8 Java source를 Tree-sitter Java로 parsing하며 root node, syntax error 여부와 syntax tree 순회를 제공한다. `JavaSemanticExtractor`는 syntax tree를 분석 계층에서 사용할 Java IR로 변환한다.
 
-The CFG currently supports ordered blocks, if/else, while, do-while, classic for, an abstract enhanced-for iteration model, colon-style switch fall-through, break, continue, return, and throw-to-method-exit. `UnknownStatement` is retained sequentially and reported through `unsupportedControlFlow`; it is not treated as fully supported.
+IR은 다음 정보를 포함한다.
 
-Switch arrow-rule value/yield semantics, labeled break/continue, precise try/catch/finally exception flow, and exceptions thrown by called methods are not fully modeled. Call graphs, complete type resolution, and general finding serialization/output are not implemented.
+- class, interface, enum, record와 package/import 정보
+- method, constructor, parameter, return type, annotation 및 method type parameter
+- member/local variable와 lexical scope
+- assignment, method call, object creation, return 및 주요 expression
+- 실제 lexical 순서와 중첩 구조를 보존하는 `BlockStatement` 기반 ordered statement hierarchy
+- 모든 주요 node의 `SourceLocation`
 
-## Intraprocedural data flow
+지원하는 statement IR에는 `BlockStatement`, `VariableDeclarationStatement`, `ExpressionStatement`, `ReturnStatement`, `IfStatement`, `WhileStatement`, `DoWhileStatement`, `ForStatement`, `EnhancedForStatement`, `SwitchStatement`, `BreakStatement`, `ContinueStatement`, `ThrowStatement`, `UnknownStatement`가 포함된다. 지원하지 않는 syntax는 완전하게 이해한 것으로 처리하지 않고 unknown/unsupported 정보로 남긴다.
 
-`ReachingDefinitionsAnalysis` uses only `MethodInfo`, ordered Statement/Expression IR, and `ControlFlowGraph`. It computes immutable `IN` and `OUT` states for reachable basic blocks with a worklist until state equality reaches a fixpoint. Predecessor states are joined by union; a parameter, initialized local declaration, or assignment generates a stable `Definition`, and a new definition kills older definitions of the same `VariableSymbol` on that path.
+## 메서드 단위 CFG
+
+`ControlFlowGraphBuilder`는 `MethodInfo.body`의 ordered Statement IR만 입력으로 사용한다. CFG 계층은 Tree-sitter node를 다시 참조하지 않는다.
 
-Variable identity is based on a parameter or local declaration's name, kind, declared type, and source location rather than name alone. Resolution is limited to references that can be linked through the method's lexical scopes. Results retain statement-before states and resolved use sites so callers can query which definitions reach a specific `VariableReference`, including uses nested in supported binary, assignment, method-call, object-creation, field-target, and parenthesized expressions. Unknown expression source text is never searched to guess uses.
+현재 CFG는 다음을 모델링한다.
 
-The reaching-definitions layer does not perform Java type resolution, alias or points-to analysis, heap identity, field-sensitive analysis, interprocedural flow, or security rule evaluation. Arbitrary field assignments remain unsupported. Compound assignment records a local read and replacement definition but does not interpret the operator's value semantics. Enhanced-for iterable uses are analyzed, but the per-iteration element definition is reported as unsupported because the current CFG does not expose that true-edge assignment separately. Unresolved references and other unsupported inputs are retained explicitly in the result.
+- entry와 exit
+- ordered statements를 담는 basic block
+- sequential, TRUE/FALSE branch, loop-back, break, continue, return, throw edge
+- `if`/`else`, `while`, `do-while`, classic/enhanced `for`
+- `switch` fall-through와 가장 가까운 loop/switch target
+- early return/throw 이후 unreachable control flow
+- successors, predecessors와 reachable blocks 조회
 
-## Intraprocedural taint propagation
+`UnknownStatement` 및 완전하게 지원하지 않는 제어 흐름은 `UnsupportedControlFlow`에 기록한다. exception CFG는 제한적이며 Java의 모든 예외 전파 의미를 모델링하지 않는다.
 
-`IntraproceduralTaintAnalysis` accepts a `DataFlowResult` and explicit definition or expression seeds supplied by its caller. It does not infer sources from annotations or API names. The finite may-taint lattice is `CLEAN < UNKNOWN < TAINTED`; a tainted predecessor therefore dominates clean and unknown alternatives at a merge. Definition dependencies are reevaluated with a worklist only when an upstream value changes, and stable STEP 4 definition identities ensure loop dependencies reach a fixpoint.
+## 동일 메서드 내부 DataFlow
 
-Variable references join the taint of their reaching definitions. Literals are clean, binary operands are joined, and parenthesized expressions forward their inner value. Receiver and argument taint are retained separately for method calls. Without an explicit expression seed or injected propagation model, arbitrary method-call returns, constructed objects, field values, unresolved references, and unknown expressions are `UNKNOWN`; their source text is not searched to infer taint.
+`IntraproceduralDataFlowAnalysis`는 reachable CFG block을 대상으로 worklist/fixpoint reaching-definitions 분석을 수행한다.
 
-Results expose definition, expression, variable-use, method receiver, and argument taint. A finite static provenance graph links external seeds, definitions, use sites, and supported expression steps, preserving multiple seed origins and representing loop cycles without growing an iteration-specific trace. The standalone STEP 5 core does not infer framework meaning, make vulnerability decisions, or cross method boundaries; STEP 6 supplies explicit seeds and method semantics, STEP 7 consumes those results in a separate detector, and STEP 18/19 add exact same-class and project-local cross-class summary layers. Compiler-complete or whole-program call graphs, alias/points-to analysis, heap-sensitive analysis, and complete field-sensitive analysis remain unsupported.
+- parameter, declaration initializer와 assignment를 안정적인 `Definition`으로 모델링한다.
+- RHS use는 이전 IN 상태에서 해석한 뒤 기존 definition을 kill하고 새 definition을 generate한다.
+- branch merge는 predecessor OUT state의 union이다.
+- loop back-edge는 상태가 바뀔 때 successor를 다시 등록해 fixpoint에 도달한다.
+- 각 정적 definition과 use occurrence는 분석 반복 동안 안정적인 identity를 유지한다.
+- lexical scope가 다른 동일 이름의 local variable은 서로 다른 `VariableSymbol`이다.
+- unresolved reference를 임의의 symbol에 연결하지 않는다.
+- `UnknownExpression.source()`를 regex나 문자열 검색으로 재해석하지 않는다.
+- unreachable statement는 Definition, UseSite 및 IN/OUT 결과에 포함하지 않는다.
 
-## Java/Spring rules and call-taint semantics
+`DataFlowResult`는 block별 IN/OUT state, Definition, UseSite, symbol resolution과 각 use에 도달하는 definitions를 제공한다. 이를 이용해 assignment chain을 변수 이름 추측이 아니라 실제 use-definition 관계로 역추적할 수 있다. 지원하지 않는 분석은 `UnsupportedDataFlow`에 남는다.
 
-`CallSiteContextResolver` builds a Tree-sitter-independent context from `JavaFileInfo`, the enclosing class and method, `DataFlowResult`, and the concrete `MethodCallExpression`. It resolves direct parameter/local/field declarations plus explicit imports, fully qualified names, an unambiguous wildcard import, and selected `java.lang` types. A small exact-signature allowlist supplies return types only for supported `Runtime`, Java NIO Path, and `java.net.URI` calls needed by registered rules. It does not perform compiler symbol solving, general overload resolution, subtype inference, or dynamic dispatch; unresolved or ambiguous receiver types do not match type-specific rules.
+## 동일 메서드 내부 Taint
 
-The default registry matches Spring MVC parameter sources for imported or fully qualified `RequestParam`, `RequestPart`, `PathVariable`, `RequestBody`, `RequestHeader`, and `CookieValue` annotations. It also matches `jakarta.servlet.http.HttpServletRequest.getParameter`, `getHeader`, and `getQueryString` return expressions, plus exact `org.springframework.web.multipart.MultipartFile.getOriginalFilename()` return expressions, when the receiver type is directly resolvable. Source matches convert to `DefinitionTaintSeed` or `ExpressionTaintSeed` without making a vulnerability decision.
+`IntraproceduralTaintAnalysis`는 DataFlow 결과를 입력으로 사용하며 `CLEAN < UNKNOWN < TAINTED`의 보수적인 may-taint 의미를 사용한다.
 
-SQL-text sink matching currently covers argument zero of `java.sql.Statement.execute`, `executeQuery`, and `executeUpdate`; `java.sql.Connection.prepareStatement`; Spring `JdbcTemplate.query`, `queryForObject`, `update`, and `execute`; and `jakarta.persistence.EntityManager.createNativeQuery`, when the receiver and SQL argument type are directly supported by the lightweight context. `PreparedStatement.setString`/other binding methods and JPA `Query.setParameter` are not SQL-text sinks. Placeholder data arguments are not marked as SQL-text positions. A sink match exposes its stable rule ID, call occurrence, sensitive argument indexes, location, and evidence for a later detector.
+- `DefinitionTaintSeed`와 `ExpressionTaintSeed`를 지원한다.
+- definition seed는 assigned expression 평가 결과보다 우선해 `TAINTED`로 유지된다.
+- 직접 assignment chain은 UseSite와 reaching Definition을 통해 전파된다.
+- overwrite 후 이전 tainted definition이 더는 도달하지 않으면 새 clean definition만 반영된다.
+- branch/loop merge 중 하나라도 tainted이면 결과는 tainted다.
+- unresolved reference, unknown expression, 모델이 없는 field value/object creation/arbitrary method return은 `UNKNOWN`이다.
+- arbitrary method argument의 taint를 해당 method return으로 자동 전파하지 않는다.
+- reachable DataFlow 결과만 사용하므로 unreachable call과 expression은 taint/provenance에 포함하지 않는다.
 
-Method-call return semantics are injected into taint analysis. The model supports unknown returns, receiver propagation, all-argument propagation, selected-argument propagation, combined receiver/argument propagation, and sanitized returns. Competing models use explicit `SANITIZER > FRAMEWORK_SPECIFIC_PROPAGATION > GENERIC_PROPAGATION` priority. Equivalent semantics at the same highest priority are accepted; conflicting semantics at that priority raise `AmbiguousMethodTaintModelException` instead of depending on registration order. The default Java models conservatively propagate `String` receiver taint through supported `trim`, `strip`, `substring`, case conversion, `concat`, and `replace` forms, path taint through the exact Java NIO calls documented below, and URI taint through exact `URI.create` and `URI.normalize` calls. These transformations are not registered as security sanitizers. The production sanitizer registry is currently empty; sanitizer behavior is verified with an explicit synthetic test rule.
+`TaintValue.join`은 다음과 같다.
 
-`RuleAwareTaintAnalysis` is the recommended STEP 6+ entry point. It matches sources, converts them to seeds, injects the registry's method semantics into `IntraproceduralTaintAnalysis`, and retains both source and sink matches with the taint result. The low-level two-argument taint API remains available for framework-independent STEP 5 use, but it intentionally has no method models and is not the recommended path when framework rules are enabled.
+```text
+CLEAN   + CLEAN   = CLEAN
+CLEAN   + UNKNOWN = UNKNOWN
+UNKNOWN + UNKNOWN = UNKNOWN
+TAINTED + CLEAN   = TAINTED
+TAINTED + UNKNOWN = TAINTED
+TAINTED + TAINTED = TAINTED
+```
 
-## SQL Injection findings
+정적 Definition, UseSite 및 Expression 기반 identity와 유한한 seed-origin set을 사용하므로 loop 재평가가 무한한 provenance node를 만들지 않는다. trace 생성은 cycle-safe이며 복수 seed가 merge될 때 한 origin이 다른 origin을 덮어쓰지 않는다. 지원하지 않는 의미는 `UnsupportedTaint`에 기록한다.
 
-`SqlInjectionDetector` consumes only `RuleAwareTaintResult`; it does not inspect Tree-sitter nodes or rediscover API names. `SinkMatch` carries the stable `SQL_TEXT` category, and the detector examines each declared sensitive argument. A finding is produced only when that argument is `TAINTED`. `CLEAN` and `UNKNOWN` arguments do not produce confirmed findings.
+## Java/Spring rule과 call-taint semantics
 
-Each finding uses rule ID `SQL_INJECTION`, vulnerability type `SQL Injection`, CWE `CWE-89`, and detector metadata severity `HIGH`. `HIGH` is not a calculated CVSS score. The primary location is the SQL argument. Source evidence retains the source rule, source kind, seed, location, and parameter or expression summary. Sink evidence separately retains the environment sink rule, method, argument index, category, and location. Flows reuse the finite STEP 5 provenance graph and contain ordered source, definition, use, expression, and sink steps. Both variable arguments and direct composite expressions are traceable; no second taint engine is used.
+`RuleRegistry`는 환경별 `SourceRule`, `SinkRule`, `SanitizerRule`과 `MethodTaintModel`을 제공한다. API 이름만으로 match하지 않고 현재 IR에서 확인 가능한 annotation FQN/import, receiver type, method name, arity와 argument 위치를 함께 사용한다.
 
-Findings are deduplicated by the physical sink call location and sensitive argument index, while every taint origin at that argument is retained in the finding. Prepared-statement/JPA parameter binding and `JdbcTemplate` placeholder data are not treated as sanitizers: they are safe in the currently modeled cases because the SQL-text argument itself is a clean literal and binding arguments are not `SQL_TEXT` positions.
+`RuleAwareTaintAnalyzer`가 권장 진입점이다.
 
-This detector covers only sources, sinks, expressions, and lightweight receiver types currently recognized by the rule and taint layers. A method return not covered by an explicit model or an exact STEP 18/19 project summary remains `UNKNOWN`, so flows such as unresolved `customBuilder(input)` can be false negatives. The implementation does not claim complete Java/Spring SQL Injection coverage. Cross-class flow outside the indexed project classes, Spring runtime bean selection, whole-program call graphs, full overload/type resolution, dynamic dispatch, alias/points-to analysis, whole-program analysis, and JSON output remain unsupported.
+```text
+JavaFileInfo / MethodInfo + DataFlowResult + RuleRegistry
+→ source match
+→ source seed 생성
+→ registry의 method semantics provider를 사용한 Taint Analysis
+→ sink match
+```
 
-## OS Command Injection findings
+결과에서 source matches, taint seeds, `TaintAnalysisResult`와 sink matches를 조회할 수 있다. low-level `IntraproceduralTaintAnalysis.analyze(dataFlow, seeds)`는 독립적인 분석과 테스트를 위해 유지하지만 framework rule을 사용하는 경로에서는 rule-aware API가 권장된다.
 
-`JavaRuntimeCommandSinkRule` adds the stable `COMMAND_EXECUTION` sink category for supported `java.lang.Runtime.exec` calls. Matching requires the receiver's lightweight qualified type to be exactly `java.lang.Runtime`, the method name to be `exec`, and argument zero to resolve to `java.lang.String`. The supported overload shapes are `exec(String)`, `exec(String, String[])`, and `exec(String, String[], java.io.File)`; argument zero is the only sensitive command position. The `String[]` command overloads are intentionally excluded because array-element taint is not modeled precisely enough.
+`MethodTaintModelRegistry`의 의미 우선순위는 등록 순서가 아니라 명시적 priority로 결정한다.
 
-Declared field, local, and parameter receivers are supported. The common `Runtime.getRuntime().exec(command)` form is also supported through one narrow known-return rule: the factory call must be the zero-argument `getRuntime()` invoked on a type reference that resolves exactly to `java.lang.Runtime`. Arbitrary method return inference and name-only `getRuntime` inference are not performed. Custom `Runtime` types and other classes with an `exec` method do not match.
+```text
+Sanitizer semantics
+> framework/specific propagation
+> generic propagation
+```
 
-`CommandInjectionDetector` consumes only `RuleAwareTaintResult` and `COMMAND_EXECUTION` matches; it does not rediscover API names. A finding is produced only when the sensitive command argument is `TAINTED`. `CLEAN` and `UNKNOWN` arguments are not confirmed findings. It reuses the same source, sink, and finite provenance evidence model as SQL Injection. Findings use rule ID `OS_COMMAND_INJECTION`, vulnerability type `OS Command Injection`, CWE `CWE-78`, and detector metadata severity `HIGH`; this is not a calculated CVSS score. Evidence states only that tainted external input reaches a supported operating-system command execution argument. It does not claim guaranteed exploitation, shell metacharacter interpretation, or that `Runtime.exec(String)` always invokes a shell.
+동일한 최고 priority에서 서로 충돌하는 model이 하나의 call에 match하면 임의의 첫 model을 고르지 않고 ambiguity를 unsupported/unknown 의미로 보존한다. Java `String`의 `trim`, `replace`, `substring` 등은 receiver가 실제 `java.lang.String`으로 해석될 때만 propagation model이 적용되며 sanitizer로 분류하지 않는다.
 
-String operations covered by the existing propagation model, including `trim`, retain taint; they are not command sanitizers. No production command sanitizer is currently registered. Findings are deduplicated by physical sink location and sensitive argument index while retaining all source origins and their provenance flows.
+## 지원 Finding
 
-`ProcessBuilder` is not a STEP 9 sink. Correctly connecting constructor or `command(...)` configuration to a later `start()` requires receiver identity and mutable object-state tracking that the current value analysis does not provide. ProcessBuilder state/start flows, shell-specific syntax analysis, OS-specific command parsing, unresolved or dynamically dispatched command flow, whole-program call graphs, alias/points-to analysis, heap-sensitive analysis, whole-program analysis, and JSON serialization remain unsupported. STEP 18/19 extend only exact acyclic project-local calls that reach the supported `Runtime.exec` String-command sink.
+현재 구현은 다음 vulnerability 및 Pattern Analysis finding을 지원한다.
 
-## Path Traversal findings
+| Category | CWE | 주요 범위 |
+| --- | ---: | --- |
+| SQL Injection | CWE-89 | JDBC, Spring JDBC, JPA native SQL의 tainted SQL text |
+| OS Command Injection | CWE-78 | `Runtime.exec`, `ProcessBuilder`의 tainted command |
+| Path Traversal | CWE-22 | 지원 file/path API의 tainted filesystem path |
+| Cross-Site Scripting (XSS) | CWE-79 | 지원 Spring MVC response context의 unencoded tainted output |
+| Server-Side Request Forgery (SSRF) | CWE-918 | 지원 network API의 tainted request target |
+| LDAP Injection | CWE-90 | 지원 LDAP API의 tainted filter |
+| XML External Entity (XXE) | CWE-611 | 명시적으로 관찰된 unsafe JAXP DOM configuration과 parse |
+| Open Redirect | CWE-601 | 지원 Spring redirect API/context의 tainted target |
+| Insecure Deserialization | CWE-502 | 지원 Java native deserialization sink |
+| Unrestricted File Upload | CWE-434 | 지원 upload flow와 검증 상태 |
+| Hardcoded Credential Pattern | CWE-798 | 별도 Pattern Analysis |
 
-`JavaNioFilesPathSinkRule` adds the stable `FILESYSTEM_PATH` category for selected static `java.nio.file.Files` APIs. It supports `readString`, `readAllBytes`, `newInputStream`, `newBufferedReader`, `writeString`, `newOutputStream`, `delete`, and `deleteIfExists` when the method's actual arity is supported and argument zero resolves to `java.nio.file.Path`. Argument zero is the only sensitive filesystem-path position. In particular, tainted content at argument one of `writeString(cleanPath, taintedContent)` does not produce a Path Traversal finding. Custom `Files` classes and similarly named methods do not match.
+각 Finding은 해당 분석에서 이용 가능한 범위로 rule id, vulnerability type, CWE, severity, location, source, sink, flow와 evidence를 보존한다. Pattern Finding에는 source-to-sink flow가 없을 수 있다.
 
-The default Java NIO model propagates taint from all String path components through exact `java.nio.file.Path.of` and `java.nio.file.Paths.get` calls. `Path.resolve(String)` and `Path.resolve(Path)` combine receiver and argument taint. `Path.normalize()` and `Path.toAbsolutePath()` propagate receiver taint and are not sanitizers: neither proves that the result remains inside an allowed base directory. Return-type inference is restricted to these exact qualified APIs and signatures, so custom `Path.of`, arbitrary `get`/`resolve` methods, and unmodeled path builders remain `UNKNOWN`.
+### SQL Injection — CWE-89
 
-`PathTraversalDetector` consumes only `RuleAwareTaintResult` and `FILESYSTEM_PATH` matches. A finding is produced only when argument zero is `TAINTED`; `CLEAN` and `UNKNOWN` do not produce confirmed findings. Findings use rule ID `PATH_TRAVERSAL`, vulnerability type `Path Traversal`, CWE `CWE-22`, and detector metadata severity `HIGH`, which is not a calculated CVSS score. Existing source evidence and finite provenance are retained through Path construction, definitions, uses, and the Files sink. Physical sink location plus sensitive argument index provides deduplication while all source origins remain represented.
+지원 rule은 receiver FQN/type, method signature와 SQL argument 위치를 확인한다.
 
-STEP 10 intentionally covers only supported external-input taint reaching the documented `java.nio.file.Files` Path arguments. It does not model `java.io.File`, `FileInputStream`, or `FileReader` constructor sinks, because constructor occurrences need a general sink abstraction and `new File` alone is path construction rather than file access. `Files.copy` and `Files.move` are also excluded because they have multiple path positions requiring separate precise modeling. STEP 18/19 can carry these supported path arguments across exact acyclic project-local calls, but full base-directory validation reasoning, path canonicalization policies, runtime bean/interface dispatch, alias/points-to analysis, object/heap state, general constructor sinks, full overload/type resolution, whole-program analysis, and JSON serialization remain unsupported.
+- `java.sql.Statement.execute(...)`, `executeQuery(...)`, `executeUpdate(...)`
+- `java.sql.Connection.prepareStatement(...)`
+- 지원하는 Spring `JdbcTemplate` SQL-first overload
+- `jakarta.persistence.EntityManager.createNativeQuery(...)`
 
-## SSRF findings
+SQL text는 지원 signature의 argument 0이어야 한다. `PreparedStatement.setString`/`setInt` 및 `Query.setParameter`는 SQL text sink가 아니다. callback/creator overload처럼 argument 0이 SQL임을 입증하지 못하는 형태는 확정적으로 match하지 않는다.
 
-`SpringRestTemplateNetworkSinkRule` adds the stable `NETWORK_REQUEST_TARGET` category for direct Spring `RestTemplate` request APIs. It supports `getForObject`, `getForEntity`, `postForObject`, `postForEntity`, `put`, `delete`, `exchange`, `execute`, `headForHeaders`, `optionsForAllow`, and `patchForObject` when the receiver resolves exactly to `org.springframework.web.client.RestTemplate`, the method meets its minimum arity, and argument zero resolves to `java.lang.String` or `java.net.URI`. Argument zero is the only request-target position. `exchange(RequestEntity, ...)`, custom RestTemplate classes, and similarly named custom client methods do not match.
+### OS Command Injection — CWE-78
 
-The URI model propagates String taint through exact `java.net.URI.create(String)` and receiver taint through exact `URI.normalize()`. `normalize()` is not an SSRF sanitizer because it does not prove an allowed scheme, host, DNS result, or IP range. Known-return typing for these calls allows direct nested forms such as `restTemplate.getForObject(URI.create(input), ...)` without general method-return inference. Custom URI factories and arbitrary URL builders remain `UNKNOWN`. `URI.resolve` is intentionally not modeled in STEP 11 because a clean base plus a tainted relative component does not by itself establish arbitrary-host SSRF semantics.
+`java.lang.Runtime.exec` 및 `java.lang.ProcessBuilder`의 지원 signature에서 command argument의 taint를 검사한다. method name만 같은 사용자 정의 API는 match하지 않는다. shell 해석 여부나 운영체제별 quoting을 완전하게 모델링하지 않는다.
 
-`SsrfDetector` consumes only `RuleAwareTaintResult` and `NETWORK_REQUEST_TARGET` matches. A finding is produced only when argument zero is `TAINTED`; `CLEAN` and `UNKNOWN` are not confirmed findings. Findings use rule ID `SSRF`, vulnerability type `Server-Side Request Forgery`, CWE `CWE-918`, and detector metadata severity `HIGH`, which is not a calculated CVSS score. Evidence states only that tainted external input reaches a supported outbound request target. Existing source evidence, finite provenance, physical-sink deduplication, and multiple source origins are retained.
+### Path Traversal — CWE-22
 
-Only the request-target argument itself is analyzed. Tainted POST bodies and tainted URI-template variables do not produce findings when argument zero is clean. This deliberately avoids treating request content as a target, but can miss URI-template-based SSRF when a later variable materially changes the effective host or scheme. Unmodeled builders and method returns also cause `UNKNOWN` false negatives.
+지원하는 `java.io`, `java.nio.file` 및 Spring resource/file API에서 filesystem path argument를 검사한다. path normalization 또는 canonicalization을 이름만으로 sanitizer라고 간주하지 않으며, alias와 실제 filesystem 상태를 추론하지 않는다.
 
-STEP 11 does not model Spring WebClient or RestClient fluent state, `java.net.http.HttpRequest` builder state linked to `HttpClient.send`, or `java.net.URL` constructor/receiver flows. These require object identity, builder state, receiver-sensitive sinks, or constructor sink abstractions beyond the current argument-sensitive method-call sink model. STEP 18/19 can carry supported `RestTemplate` target taint across exact acyclic project-local calls, but DNS rebinding, private/internal IP classification, redirect chains, complete host allowlist and scheme validation, runtime bean/interface dispatch, whole-program call graphs, alias/points-to analysis, heap-sensitive analysis, whole-program analysis, and JSON serialization remain unsupported.
+### Server-Side Request Forgery — CWE-918
 
-## LDAP Injection findings
+지원하는 URL/URI 및 Spring HTTP client 호출에서 network request target의 taint를 검사한다. DNS resolution, redirect chain, allowlist의 runtime 내용이나 네트워크 상태는 분석하지 않는다.
 
-`JndiLdapFilterSinkRule` adds the stable `LDAP_FILTER` category for supported JNDI `search` calls. Exact declared receiver types are limited to `javax.naming.directory.DirContext`, `InitialDirContext`, `javax.naming.ldap.LdapContext`, and `InitialLdapContext`; no subtype inference is claimed. Supported overload structures are `(String|Name base, String filter, SearchControls)` and `(String|Name base, String filterExpr, Object[] filterArgs, SearchControls)`. Argument one is the only LDAP-filter sink position. Attributes-based search overloads, custom directory types, and similarly named `search` methods do not match.
+### LDAP Injection — CWE-90
 
-The parameterized overload distinguishes filter text from substitution values. A tainted `filterExpr` at argument one can produce a finding, while a clean literal filter expression plus tainted `filterArgs` at argument two does not. This is argument-position modeling, not sanitizer behavior. Likewise, a tainted base DN/name at argument zero with a clean filter does not produce this CWE-90 filter finding; base-name injection requires separate semantics and CWE review.
+지원 LDAP API에서 filter expression argument의 taint를 검사한다. receiver와 signature가 확인되지 않은 유사 이름 API는 match하지 않는다.
 
-`LdapInjectionDetector` consumes only `RuleAwareTaintResult` and `LDAP_FILTER` matches. A finding is produced only when argument one is `TAINTED`; `CLEAN` and `UNKNOWN` are not confirmed findings. Findings use rule ID `LDAP_INJECTION`, vulnerability type `LDAP Injection`, CWE `CWE-90`, and detector metadata severity `HIGH`, which is not a calculated CVSS score. Existing source evidence, String concatenation/assignment/trim propagation, finite provenance, physical-sink deduplication, and multiple source origins are reused.
+### XML External Entity — CWE-611
 
-No LDAP sanitizer is registered in STEP 12. Names such as `escape`, `encode`, `sanitize`, `validate`, or custom `escapeLdapFilter` do not establish escaping semantics, and ordinary String transformations such as `trim` and `replace` continue to propagate taint. STEP 18/19 can carry a supported JNDI filter argument across exact acyclic project-local calls, but Spring `LdapTemplate`, custom LDAP wrappers, arbitrary escaping semantics, LDAP server/schema/authentication behavior, full subtype and overload resolution, runtime bean/interface dispatch, whole-program call graphs, alias/points-to analysis, heap-sensitive analysis, whole-program analysis, and JSON serialization remain unsupported. Unresolved calls remain `UNKNOWN` and can cause false negatives.
+`DomXxeConfigurationAnalyzer`는 JAXP DOM factory/builder의 명시적으로 관찰된 configuration state와 parse를 연결한다. 관찰하지 않은 provider/JDK default는 추론하지 않으며 `UNKNOWN` 상태만으로 confirmed finding을 만들지 않는다.
 
-## XML External Entity findings
+confirmed XXE Finding은 external entity resolution 가능성을 충분히 입증하는 보수적인 조합에서만 생성한다. 다음 설정 하나만으로는 다른 관련 설정이 `UNKNOWN`인 상황에서 confirmed CWE-611을 만들지 않는다.
 
-STEP 13 produces CWE-611 findings for supported same-method JAXP DOM parser flows only when one complete external-resolution path is explicitly proven and a `DocumentBuilder` derived from that factory is subsequently used to parse XML. A single permissive configuration is not sufficient. This is a configuration-state detector, not a taint-sink detector: it uses ordered Statement/Expression IR, method CFG, `VariableSymbol` identity, exact lightweight qualified types, and a separate `ConfigurationFinding`. It does not add fake taint sources, sinks, sanitizers, or provenance flows.
+- `disallow-doctype-decl = false`
+- `external-general-entities = true`
+- `external-parameter-entities = true`
+- `load-external-dtd = true`
+- `setXIncludeAware(true)`
+- `setExpandEntityReferences(true)`
 
-The supported types are exactly `javax.xml.parsers.DocumentBuilderFactory` and `javax.xml.parsers.DocumentBuilder`. The analyzer recognizes zero-argument `DocumentBuilderFactory.newInstance()`, direct local factory configuration, zero-argument `factory.newDocumentBuilder()`, and the standard `DocumentBuilder.parse` overload shapes for `InputStream`, `InputStream` plus `String`, `String`, `File`, and `InputSource`. Custom types with the same method names do not match.
+`setXIncludeAware(true)`는 전통적인 external entity resolution과 동일한 단독 증거로 취급하지 않는다. `setExpandEntityReferences(true)`도 external entity loading이 실제 허용됨을 단독으로 증명하지 않는다. unsupported 또는 불완전한 configuration은 분석 제한으로 남긴다.
 
-The confirmed classic XXE paths are `disallow-doctype-decl=false` plus one of `external-general-entities=true`, `external-parameter-entities=true`, or `load-external-dtd=true`, together with an explicitly allowed `XMLConstants.ACCESS_EXTERNAL_DTD` value. The analyzer recognizes the exact access-property URI as a string literal and the imported `XMLConstants.ACCESS_EXTERNAL_DTD` field reference. An empty or whitespace-only String value denies access; `all` or any explicit non-empty protocol-list literal allows access; a non-literal value is unknown. Feature and property matching is exact.
+### Open Redirect — CWE-601
 
-Missing hardening alone is not a confirmed finding. Parser, provider, JDK, and external-access defaults are not inferred, so an unobserved setting is `UNSET` and cannot complete a confirmed path; non-literal or conflicting values are `UNKNOWN`. This conservative policy can cause false negatives. Writes use CFG execution order, so a later write to the same key or access property replaces the earlier state. Builder creation snapshots both feature and external-access state, and later factory changes are not retroactively attributed to an already-created builder. At CFG merges, `ALLOW` versus `DENY`, `UNSET`, or `UNKNOWN` becomes `UNKNOWN`; feature conflicts are handled equivalently. Loop paths use the same finite-state merge rather than lexical last-write guessing. One physical parse occurrence yields at most one finding, retaining the evidence for every proven path.
+지원 Spring MVC redirect context에서 외부 입력이 redirect target에 도달하는지를 검사한다. 단순 문자열 `redirect:` 검색만으로 Finding을 만들지 않으며, route/view 의미를 확인할 수 없는 경우 확정하지 않는다.
 
-`setExpandEntityReferences(true)` is not a confirmed trigger because it controls DOM entity-reference node expansion rather than independently enabling external resolution. `setXIncludeAware(true)` is also excluded from the STEP 13 classic XXE rule; XInclude external-inclusion semantics require a separate future analysis. Neither setting is treated as a taint sanitizer or as proof of CWE-611.
+### Insecure Deserialization — CWE-502
 
-The current object identity scope is direct variables in one method. Factory-to-factory or builder aliases, fields, parameters passed to helper methods, interprocedural configuration, arbitrary points-to/heap state, and whole-program analysis are unsupported. SAX, StAX, TransformerFactory, SchemaFactory, JAXB, XPath, Apache-specific XML APIs, and Spring XML wrappers are outside STEP 13. The detector does not independently prove attacker-controlled XML content, entity URL resolution, filesystem/network entity targets, or exploitability. `HIGH` is project detector metadata, not a calculated CVSS score.
+지원 Java native deserialization API와 tainted input flow를 검사한다. classpath gadget 존재, custom `readObject` 동작 또는 runtime type을 추론하지 않는다.
 
-## Open Redirect findings
+### Cross-Site Scripting — CWE-79
 
-`JakartaServletRedirectSinkRule` adds the stable `REDIRECT_TARGET` category for the exact `jakarta.servlet.http.HttpServletResponse.sendRedirect` receiver. It supports the directly resolvable overloads `(String)`, `(String, boolean)`, `(String, int)`, and `(String, int, boolean)`; argument zero is the only redirect-target position. Custom response types, similarly named methods, unsupported argument shapes, and the legacy `javax.servlet` type do not match.
+지원 Spring MVC response context의 tainted output을 검사한다. HTML/attribute/JavaScript 등 모든 출력 문맥과 모든 encoding library를 완전하게 모델링하지 않는다. 이름이 비슷한 method만으로 sink나 sanitizer를 단정하지 않는다.
 
-`OpenRedirectDetector` requires both confirmed external-input taint and `FULLY_CONTROLLED` redirect-target shape. The separate `RedirectTargetControlAnalysis` reuses STEP 4 reaching definitions, stable `Definition.assignedExpression` values, Expression IR, and STEP 5 seeds. Direct sources, assignments, supported receiver-preserving String operations such as `trim`, and tainted-left concatenations are fully controlled. A known non-empty clean String prefix followed by tainted input is `FIXED_PREFIX`; a clean literal is `CLEAN`; unsupported construction remains `UNKNOWN`. Only `FULLY_CONTROLLED` produces a confirmed finding. This distinction prevents a tainted suffix in `"/users/" + input` or `"https://trusted.example/users/" + input` from being reported as confirmed CWE-601 while retaining the underlying taint evidence.
+### Unrestricted File Upload — CWE-434
 
-Binary concatenation follows the IR's left-to-right structure, including nested forms. Reaching-definition alternatives use may-analysis: a proven `FULLY_CONTROLLED` path dominates clean, fixed-prefix, and unknown alternatives; `CLEAN` plus `FIXED_PREFIX` remains non-confirmed `FIXED_PREFIX`; without a fully controlled path, `UNKNOWN` dominates known non-confirmed states. Findings use rule ID `OPEN_REDIRECT`, vulnerability type `Open Redirect`, CWE `CWE-601`, and detector metadata severity `MEDIUM`; this is project metadata, not a calculated CVSS score. Existing source evidence, finite provenance, physical-sink deduplication, and multiple source origins are reused. The evidence says only that tainted external input controls a supported redirect target and does not claim guaranteed external-site redirection or exploitation.
-
-No redirect sanitizer is registered. Names such as `startsWith`, `contains`, `matches`, `replace`, `trim`, `validateRedirect`, `sanitizeUrl`, and `isAllowedUrl` are not treated as allowlist proof. Arbitrary redirect-validation and control-flow semantics are unsupported. Spring MVC `"redirect:"` return values, `RedirectView` construction or mutable state, `ResponseEntity` location builders, and `Location` header plus 3xx-status linkage require return-, constructor-, object-, builder-, or multi-call state modeling and are outside STEP 14. Interprocedural redirect flow is also unsupported. Unmodeled builders and `UNKNOWN` shapes can therefore cause false negatives; this implementation does not claim complete Open Redirect coverage.
-
-## Java Native Insecure Deserialization findings
-
-STEP 15 produces CWE-502 findings when supported external input is used to construct an exact `java.io.ObjectInputStream` that is subsequently used by zero-argument `readObject()` within the supported same-method object lineage. A `readObject` name alone is not a finding. Exact receiver qualification, a recognized input-stream construction path, external-source taint, and the same derived object-input stream identity are all required. `readUnshared` is not currently supported.
-
-The dedicated `JavaObjectDeserializationAnalyzer` follows direct local identities over the method CFG without changing generic `ObjectCreationExpression` taint. It recognizes exact one-argument `java.io.ByteArrayInputStream(byte[])`, exact `java.io.BufferedInputStream(InputStream)` and `(InputStream, int)` wrappers, exact one-argument `java.io.ObjectInputStream(InputStream)`, and direct `jakarta.servlet.http.HttpServletRequest.getInputStream()` input. `@RequestBody byte[]` uses the existing Spring parameter source and `getInputStream()` uses the exact servlet expression-source rule. Direct nested construction, local intermediate stream variables, direct local assignment aliases, branch alternatives, and multiple source origins are retained. A tainted alternative dominates clean or unknown alternatives under the existing may-analysis policy; only a resulting `TAINTED` lineage is confirmed. `CLEAN`, `UNKNOWN`, missing construction lineage, construction without `readObject`, or `readObject` without a derived receiver do not produce findings.
-
-Because `readObject()` has no sensitive argument, STEP 15 does not fabricate a `FindingSink` argument index. `DeserializationFinding` records source evidence, existing taint provenance to the supported input expression, ordered constructor/wrapper evidence, every possible `ObjectInputStream` creation location, and the physical `readObject` location. Findings use rule ID `INSECURE_DESERIALIZATION`, vulnerability type `Insecure Deserialization`, CWE `CWE-502`, and detector metadata severity `HIGH`; this is project metadata, not a calculated CVSS score. One physical `readObject` occurrence yields one finding while all source origins are preserved.
-
-Java native `ObjectInputStream` is the only deserializer covered. Field-stored streams, arbitrary aliases, collections, helper-method stream transfer, interprocedural object identity, heap/points-to analysis, and unsupported stream builders remain outside the analysis; `UNKNOWN` lineage can therefore cause false negatives. `ObjectInputFilter`, global serialization filters, and JVM filter properties are not interpreted as sanitizers or proven allowlists, so filter configuration can cause false positives or false negatives. Gadget-chain availability and exploitability are not established. Jackson, Gson, SnakeYAML, XStream, Kryo, Hessian, `XMLDecoder`, Spring serialization wrappers, and custom `deserialize` methods are not classified by this Java-native rule.
-
-## Cross-Site Scripting findings
-
-STEP 16 produces CWE-79 findings for supported same-method Jakarta Servlet flows where external input is written raw through an exact `java.io.PrintWriter` derived from an exact `jakarta.servlet.http.HttpServletResponse` that is explicitly configured as `text/html`. `JavaPrintWriterResponseBodySinkRule` assigns the stable `HTTP_RESPONSE_BODY` category to exact one-String-argument `write`, `print`, and `println` calls. That category is not itself an XSS decision: `XssDetector` additionally requires direct response-to-writer lineage, proven HTML content state, and a `RAW_TAINTED` output value.
-
-`ServletHtmlResponseAnalyzer` tracks each direct response variable's `HTML`, `NON_HTML`, `UNKNOWN`, or `UNSET` state over the CFG. A String literal is HTML only when the media type before the first semicolon, after trimming, equals `text/html` case-insensitively. Similar substrings such as `application/not-text/html` remain non-HTML. A later `setContentType` strongly replaces the earlier state on that path. At branches and loops, only identical states remain proven; HTML versus non-HTML, unset, or unknown merges to `UNKNOWN`, so all paths reaching a confirmed output must establish HTML. Content-type evidence retains the effective configuration occurrence without retaining overwritten duplicates.
-
-Exact zero-argument `HttpServletResponse.getWriter()` is a narrow known-return type and establishes the writer lineage. Both a direct nested `response.getWriter().write(value)` and a directly assigned local `PrintWriter` are supported. Custom response/writer classes, legacy `javax.servlet`, unrelated `PrintWriter` values, and a writer derived from a different response do not establish this context. Findings use rule ID `XSS`, vulnerability type `Cross-Site Scripting (XSS)`, CWE `CWE-79`, and detector metadata severity `MEDIUM`; this is project metadata, not a calculated CVSS score. `XssFinding` retains ordinary source/sink/provenance plus structured HTML content-type, writer-derivation, and output evidence. Findings are deduplicated by physical writer output occurrence and argument index while preserving all source origins.
-
-String literals are `CLEAN`; raw tainted variables and concatenations such as `"<div>" + input` are `RAW_TAINTED`. Exact `org.springframework.web.util.HtmlUtils.htmlEscape(String)` is modeled only in the XSS-specific output-safety analysis as `HTML_ESCAPED`; it is not a generic taint sanitizer and does not affect SQL, LDAP, command, or other detectors. Arbitrary `escape`, `sanitize`, `encode`, `replace`, or `trim` names are not treated as HTML safety. Unmodeled returns remain `UNKNOWN` and can cause false negatives.
-
-The current scope is explicit servlet HTML response-body output only. Missing or non-literal content type is not confirmed. Spring MVC `@ResponseBody`/`@RestController` return values, `@GetMapping(produces=...)`, `ServletOutputStream`, Model/Thymeleaf/JSP/FreeMarker/Mustache flows, template auto-escaping, and HTML attribute, JavaScript, CSS, or URL subcontexts are not analyzed. These require return/template/output-context semantics beyond direct response-writer identity. Interprocedural XSS, fields, arbitrary aliases, heap state, and whole-program output flow are also unsupported.
-
-## Unrestricted File Upload findings
-
-STEP 17 produces CWE-434 findings for supported same-method Spring `MultipartFile` transfer flows where an external multipart upload is persisted using a filename/type whose trailing file-name portion remains attacker-controlled. `SpringMultipartFileTransferSinkRule` assigns the stable `FILE_UPLOAD_TARGET` category only to exact `org.springframework.web.multipart.MultipartFile.transferTo(java.nio.file.Path)` and `transferTo(java.io.File)` calls. That category alone is not a vulnerability decision: the detector also requires a directly resolved external `MultipartFile` parameter receiver and `ATTACKER_TYPE_CONTROLLED` target state.
-
-External upload receiver identity is limited to a direct parameter annotated with an exact imported or fully qualified Spring `@RequestParam` or `@RequestPart`. Exact `MultipartFile.getOriginalFilename()` is an expression source with a narrow known `String` return type. Custom annotations, custom `MultipartFile` types, custom `transferTo` or `getOriginalFilename` methods, fields, collections, arbitrary aliases, and helper-method receiver transfer do not establish a supported upload flow.
-
-`FileUploadTargetControlAnalysis` uses stable reaching definitions and ordered Expression IR rather than source-text matching. It follows the last filename component through exact `Path.of`, `Paths.get`, and `Path.resolve` shapes and exact `java.io.File(String)`, `File(String, String)`, and `File(File, String)` constructions. Binary String concatenation preserves left-to-right nesting. A final external filename or suffix is `ATTACKER_TYPE_CONTROLLED`; a clean server literal is `CLEAN`; an explicit server-controlled trailing extension such as `.jpg` or `.png` is `FIXED_EXTENSION`; unsupported builders and ambiguous values are `UNKNOWN`. Only `ATTACKER_TYPE_CONTROLLED` produces a confirmed finding. Thus `"/uploads/" + input` is confirmed, while `input + ".jpg"` is not confirmed by this specific attacker-type-control predicate. A fixed extension does not prove that uploaded content is safe.
-
-Findings use rule ID `UNRESTRICTED_FILE_UPLOAD`, vulnerability type `Unrestricted File Upload`, CWE `CWE-434`, and detector metadata severity `HIGH`; this is project metadata, not a calculated CVSS score. `FileUploadFinding` retains the exact multipart source, every relevant filename source, target construction, target type/control state, and physical `transferTo` occurrence as structured context evidence. It intentionally does not fabricate a generic taint argument flow for constructor-specific context. One physical `transferTo` occurrence yields at most one finding even when multiple filename origins reach it.
-
-Method names such as `validateFile`, `validateExtension`, `sanitizeFilename`, `isAllowedExtension`, `endsWith`, or `matches` are not treated as validation or sanitization. `getContentType()` is not a safety proof because client-supplied MIME metadata is not trusted by this analysis. STEP 17 does not analyze MIME allowlists, magic bytes, antivirus/content scanning, archive extraction, ZIP Slip, webroot or executable-directory placement, serving behavior, or uploaded-content exploitability. It does not support S3/cloud/object-storage APIs, general `Files.copy`/`Files.write` upload inference, Servlet `Part.write`, WebFlux `FilePart`, arbitrary storage APIs, interprocedural upload flow, fields, heap/points-to state, or whole-program analysis. `UNKNOWN` is non-confirmed and can therefore cause false negatives.
+지원 Spring multipart upload flow와 관찰 가능한 검증/저장 context를 분석한다. 실제 storage ACL, malware scanning, content sniffing 또는 runtime file policy는 추론하지 않는다.
 
 ## Same-class interprocedural taint
 
-STEP 18 adds same-class interprocedural taint summaries for directly resolved acyclic method calls. Parameter-to-return and parameter-to-supported-taint-sink dependencies allow SQL Injection, OS Command Injection, Path Traversal, SSRF, and LDAP Injection findings to cross same-class method boundaries. The class-level `SameClassInterproceduralAnalysis` prepares each method's existing CFG and reaching definitions, resolves direct calls, computes reusable synthetic parameter-dependency summaries, reruns actual rule-aware taint with same-class return semantics, and produces deduplicated findings. Synthetic summary seeds never appear as vulnerability sources; findings retain the original caller-side framework source.
+STEP 18 분석은 같은 class의 직접 호출만 제한적으로 해석한다.
 
-Resolution is limited to unqualified `helper(...)`, `this.helper(...)`, and a current-class static-style type receiver whose name and lightweight qualified type both identify the enclosing class and are not shadowed by a local, parameter, or field value. The IR does not independently retain or verify the target method's `static` modifier, so this is not compiler-complete static-call validation. Resolution uses method name, argument/parameter count, and exact lightweight argument/parameter types when overloads require disambiguation. A unique name/arity candidate can resolve without compiler conversion inference only when known argument and parameter types do not conflict; multiple candidates require one unique exact lightweight-type match. Shadowed type names, ambiguous overloads, unknown or incompatible argument types, wrong arity, arbitrary receivers, and `super`/inherited calls are explicitly recorded as unsupported rather than selecting the first method. Java boxing, widening, varargs conversion, inheritance, interfaces, overrides, and dynamic dispatch are not modeled.
+- `helper(arg)`와 `this.helper(arg)`를 대상으로 한다.
+- caller argument → callee parameter와 callee return → caller expression 경계를 보존한다.
+- acyclic `A → B → C` summary chain을 지원한다.
+- self recursion과 mutual recursion은 propagation에서 제외하고 unsupported로 기록한다.
+- synthetic callee-parameter seed는 사용자-facing `FindingSource`로 노출하지 않는다.
+- 원래 caller의 `@RequestParam` 등 실제 source는 Finding source로 유지한다.
+- physical sink location은 실제 callee sink 위치다.
+- method call, parameter binding과 return boundary가 provenance에 보존된다.
 
-Each `SameClassMethodSummary` distinguishes `CLEAN`, `PARAMETER_DEPENDENT`, and `UNKNOWN` returns, preserves the influencing parameter indexes, and retains direct or transitive sink dependencies with physical sink locations and finite call-chain evidence. `CLEAN_RETURN` means only that the analyzed return has no parameter dependency; it is distinct from security sanitizer semantics. Same-class summary semantics have explicit precedence below `SANITIZER` and above framework-specific and generic propagation, so registration order does not choose the result.
+Overload resolution은 method name만 보지 않는다. name, arity, argument/parameter type compatibility를 확인하며 다음 정책을 사용한다.
 
-Direct acyclic chains are expanded without a fixed depth. Self-recursion and mutually recursive strongly connected paths are recorded as `RECURSIVE_CALL` and excluded from summary expansion; recursive method bodies remain available to ordinary intraprocedural analysis. Cross-method flow evidence uses explicit `METHOD_CALL`, `PARAMETER_BINDING`, and `METHOD_RETURN` boundaries while preserving internal definition/use steps when available. Findings are deduplicated by vulnerability rule, physical sink occurrence, and sensitive argument index while retaining multiple caller sources and flows.
-
-The analysis is a may-taint analysis, not path-sensitive execution proof. Only the pure-taint sink categories `SQL_TEXT`, `COMMAND_EXECUTION`, `FILESYSTEM_PATH`, `NETWORK_REQUEST_TARGET`, and `LDAP_FILTER` are extended. XXE configuration state, Open Redirect target shape, native-deserialization object lineage, XSS output context, MultipartFile receiver/target control, and Hardcoded Credential pattern findings remain intraprocedural. STEP 18 itself does not cross classes; STEP 19 provides the limited project-local extension below. Field/heap propagation, aliases/points-to, recursive summary solving, reflection, lambdas/method references, asynchronous flow, whole-program call graphs, and JSON output remain unsupported. `UNKNOWN` summaries or unresolved calls can cause false negatives.
+- exact candidate가 있으면 compatible/unknown 후보보다 우선한다.
+- exact candidate가 없고 `COMPATIBLE` 후보가 정확히 하나이며 competing `UNKNOWN` 후보가 없을 때만 그 후보를 선택한다.
+- `COMPATIBLE` 후보가 둘 이상이면 `AMBIGUOUS_OVERLOAD`다. `UNKNOWN` 후보가 함께 있어도 ambiguity가 우선한다.
+- `COMPATIBLE` 하나와 `UNKNOWN` 하나 이상이 경쟁하면 `UNKNOWN_ARGUMENT_TYPE`으로 해석을 중단한다.
+- compatible 후보 없이 unknown 후보가 있으면 `UNKNOWN_ARGUMENT_TYPE`이다.
+- 단, name/arity가 맞는 후보가 하나뿐이고 알려진 incompatibility가 없는 singleton `UNKNOWN` 사례는 기존의 보수적인 singleton 정책에 따라 resolve될 수 있다.
+- incompatible 후보만 남으면 지원하지 않는 type mismatch로 기록한다.
+- 모호한 overload에서 첫 candidate를 임의 선택하지 않는다.
 
 ## Project-local cross-class interprocedural taint
 
-STEP 19 extends the STEP 18 summary engine to directly typed project-local cross-class calls. `CrossClassInterproceduralAnalysis` accepts already parsed and extracted `JavaFileInfo` values, builds a `ProjectClassIndex` keyed by class FQN, creates owner-qualified `ProjectMethodId` call-graph nodes, and resolves direct acyclic calls when the receiver's declared lightweight qualified type names one unique concrete project class and one name/arity/type-compatible method. Same-class and cross-class edges share the same parameter-to-return, parameter-to-supported-sink, provenance, source-preservation, physical-sink, and finding-deduplication machinery.
+STEP 19 분석은 project 내에서 선언된 concrete class 간의 고신뢰 직접 호출만 해석한다.
 
-The supported input is an in-memory collection of extracted files; filesystem discovery, recursive source scanning, CLI project scans, and JSON output are not part of STEP 19. Same-package types, explicit imports, exact FQNs, and an unambiguous lightweight wildcard qualification can resolve when the resulting FQN exists uniquely in the project index. A project-local method without an analyzable IR body is retained as `NO_ANALYZABLE_BODY` rather than used as a summary target. An exact qualified receiver type absent from the project index is `EXTERNAL_CLASS`; the resolver does not replace it with unrelated same-simple-name project classes. Duplicate FQNs, ambiguous unqualified simple names, unknown receiver types, incompatible or ambiguous overloads, interface receivers, `super`, and recursive same- or cross-class cycles are reported as unsupported rather than guessed. Spring `@Controller`, `@RestController`, `@Service`, `@Repository`, and injection annotations are not dispatch evidence: declared field, local, or parameter types drive resolution, and no Spring container, `@Qualifier`, `@Primary`, component scan, or interface-to-implementation bean selection is performed.
+- declared receiver type을 project class FQN으로 해석할 수 있어야 한다.
+- duplicate FQN class는 임의 선택하지 않는다.
+- interface receiver, runtime implementation 선택, runtime override dispatch 및 external class 내부 호출은 지원하지 않는다.
+- target method name, arity와 보수적인 type compatibility를 확인한다.
+- 한 파일의 실패가 다른 file/class 분석을 중단시키지 않으며 unsupported call을 기록한다.
 
-STEP 19 keeps the five pure-taint categories `SQL_TEXT`, `COMMAND_EXECUTION`, `FILESYSTEM_PATH`, `NETWORK_REQUEST_TARGET`, and `LDAP_FILTER`. It can therefore represent exact acyclic Controller-to-Service-to-Repository-style SQL Injection, OS Command Injection, Path Traversal, SSRF, and LDAP Injection flows, including mixed same/cross-class chains and nested return provenance. It does not classify Spring Data repository method names as SQL sinks. XSS output context, XXE configuration state, Open Redirect target control, native-deserialization object lineage, file-upload receiver/target state, and hardcoded-credential patterns are not extended across classes.
+Same-class 및 cross-class generic interprocedural Finding은 다음 다섯 pure-taint category로만 제한한다.
 
-This remains a conservative may-taint analysis, not path-sensitive execution or compiler-complete Java dispatch. Inheritance and override dispatch, interface implementation selection, boxing/widening/varargs conversion, reflection, lambdas/method references, async/reactive flow, field/heap taint, alias/points-to analysis, and whole-program call graphs are unsupported. Exact declared class receivers may resolve only to that indexed owner; runtime subtype selection is never attempted.
+- `SQL_TEXT`
+- `COMMAND_EXECUTION`
+- `FILESYSTEM_PATH`
+- `NETWORK_REQUEST_TARGET`
+- `LDAP_FILTER`
 
-## External-path Project Runner
+XSS, XXE, Open Redirect, Insecure Deserialization 및 Unrestricted File Upload는 이 generic interprocedural summary로 확장하지 않는다. 이들은 각 detector의 context-sensitive intraprocedural 의미를 유지한다. 기존 intraprocedural Finding과 동일한 physical sink Finding은 안정적인 identity로 중복 제거한다.
 
-STEP 20 adds `ProjectScanner` as the supported orchestration API for one already-local Java project root. `ProjectScanner.javaDefaults().scan(projectRoot)` discovers conventional production `src/main/java` roots, including multi-module layouts, parses each `.java` file once with `JavaSourceParser`, extracts each successfully parsed file once with `JavaSemanticExtractor`, and passes the collected IR to the STEP 19 project-local analysis. Test sources are excluded by default and can be included through `ProjectScanRequest`. UTF-8 is the default charset.
+## STEP 22 보수적 Java type qualification과 assignability
 
-Discovery is deterministic and does not fall back to scanning arbitrary Java files when no conventional source root exists. `.git`, `.gradle`, `.gradle-user-home`, `build`, `target`, `out`, `node_modules`, `.idea`, and `generated` directories are excluded. Symbolic links and configured source roots resolving outside the requested project root are not followed. The target project is read only: the runner does not build, format, generate into, or otherwise modify it.
+`LightweightTypeContext`, `ConservativeTypeCompatibility`와 project hierarchy index는 compiler-complete type checker가 아니라, source에서 증명할 수 있는 경우에만 call resolution 범위를 넓히는 경량 모델이다.
 
-`ProjectScanResult` contains relative discovered/parsed/extracted file paths, structured discovery/read/parse/extraction/analysis diagnostics, all aggregated `FindingResult` values, unsupported interprocedural records, status, and summary counts. Syntax errors or per-file extraction failures are recorded while other files continue. Fatal parser initialization or project-analysis invariant failures are distinguished from nonfatal partial results. Findings are deterministically sorted by project-relative file, line, column, and rule, and are deduplicated by finding result type, rule ID, and primary source location.
+Type qualification 정책은 다음과 같다.
 
-The runner reuses STEP 19 CFG/DataFlow results for method orchestration. STEP 19 supplies SQL Injection, OS Command Injection, Path Traversal, SSRF, and LDAP Injection findings. Existing intraprocedural XXE, Open Redirect, Insecure Deserialization, XSS, and Unrestricted File Upload detectors run with the cached method DataFlow and ordinary rule-aware taint so their documented context-sensitive scope is not silently broadened. Duplicate class FQNs remain ambiguous and unsupported for project-level interprocedural resolution, but every successfully extracted physical class and body-bearing method still receives the supported intraprocedural/context-sensitive analysis; methods excluded from STEP 19 summaries receive an isolated intraprocedural CFG/DataFlow fallback and are never fed back into cross-class resolution. `PatternAnalysis.javaDefaults()` continues to run independently over every extracted file for Hardcoded Credential findings.
+- explicit import/FQN을 우선하며, 단순 이름을 임의의 FQN으로 만들지 않는다.
+- 알려진 implicit `java.lang` type을 지원하되, explicit import에 의해 합법적으로 shadow될 수 있는 Java 이름 해석을 존중한다.
+- same-package type은 해당 project type의 존재가 확인될 때만 사용한다.
+- wildcard import는 실제 project type 또는 알려진 type 존재를 확인할 수 있을 때만 후보를 만든다.
+- wildcard 후보가 복수이면 unknown/ambiguous로 남긴다.
+- duplicate FQN은 하나를 임의 선택하지 않는다.
 
-Run a local project scan with:
+지원하는 보수적 compatibility는 다음과 같다.
+
+- exact type
+- reference type에 대한 `Object` parameter
+- method-level type variable과 표현 가능한 단일 upper bound
+- 안전하게 비교 가능한 generic raw/erasure shape
+- exact boxing/unboxing
+- 방향이 올바른 primitive widening
+- source로 증명된 project-local class/interface subtype
+
+제한은 다음과 같다.
+
+- `Object` 규칙을 primitive argument에 직접 적용하지 않는다.
+- bounded type variable은 bound와 무관한 type을 허용하지 않는다.
+- unrelated generic raw type을 compatible로 만들지 않는다.
+- primitive narrowing이나 wrapper 간 임의 numeric conversion을 허용하지 않는다.
+- unresolved/external parent hierarchy를 추측하지 않는다.
+- hierarchy traversal은 cycle-safe이며 duplicate subtype, target supertype 또는 intermediate parent가 있으면 해당 proof를 중단한다.
+- hierarchy는 argument assignability에만 사용한다. interface implementation 선택이나 runtime dispatch에는 사용하지 않는다.
+
+Generic type-variable array shape도 보존한다.
+
+- scalar `T`의 기존 method type-variable 의미는 유지한다.
+- `T[]`는 scalar argument와 compatible하지 않다.
+- 배열 차원이 같을 때만 component type compatibility를 검사한다.
+- `T[][]` 같은 multidimensional dimension을 보존한다.
+- `T[]` 또는 bounded `T[]`에 `int[]`, `long[]`, `boolean[]` 등 primitive-component array를 허용하지 않는다.
+- `int[] → T[]`에 element-wise boxing을 적용하지 않는다.
+- `String[] → T[]`, `String[][] → T[][]`처럼 reference component와 동일 dimension인 경우에만 현재 type-variable 의미 안에서 판단한다.
+- `T...`를 scalar `T`로 취급하지 않으며 varargs invocation conversion은 지원하지 않는다.
+
+Method-level type parameter는 해당 method declaration에만 연결한다. class-level generic parameter를 method-level parameter로 가장하지 않으며, 현재 IR 표현 범위를 벗어나는 복수/intersection bound는 추측하지 않는다.
+
+## 외부 경로 Project Runner
+
+`ProjectScanner`는 전달받은 `projectRoot`를 기준으로 외부 Java/Spring project를 읽기 전용으로 분석한다. current working directory나 이 저장소 경로를 대상 project로 암묵적으로 사용하지 않는다.
+
+- multi-module의 `src/main/java` source를 중복 없이 발견한다.
+- `.git`, `build`, `target`, `out`, generated/cache 경로를 제외한다.
+- symlink 또는 canonical path가 project root 밖으로 벗어나면 분석하지 않는다.
+- 각 Java source는 기본적으로 한 번 parsing하고 한 번 semantic extraction한다.
+- READ, PARSE 또는 SEMANTIC_EXTRACTION 실패와 diagnostics는 파일별로 남기고 다른 파일 분석을 계속한다.
+- project-level interprocedural 분석과 각 method에 적용 가능한 context-sensitive intraprocedural detector를 실행한다.
+- `PatternAnalysis.javaDefaults()`를 추출에 성공한 모든 `JavaFileInfo`에 적용한다.
+- 동일 detector를 runner에서 중복 실행하지 않는다.
+
+`ProjectScanResult`는 discovered/analyzed files, Finding, unsupported 및 failure를 제공한다. fatal failure는 유효한 project scan 자체를 시작하거나 유지할 수 없는 경우이며, 일부 파일 실패/unsupported는 `PARTIAL`로 표현할 수 있다. unsupported가 존재하거나 Finding이 0개여도 이를 안전 판정으로 바꾸지 않는다.
+
+최종 Finding 정렬은 location과 rule을 포함한 안정적인 key를 사용하며 Finding의 source/evidence/flow를 변경하지 않는다. 중복 제거는 detector/interprocedural 계층의 occurrence identity를 보존하도록 physical occurrence와 category/rule 정보를 사용한다. Hardcoded Credential의 실제 secret literal은 CLI summary 또는 `ProjectScanResult.toString()`에 출력하지 않는다.
+
+CLI exit code 정책은 다음과 같다.
+
+- 정상 또는 partial scan: `0`
+- invalid input 또는 fatal scan failure: non-zero
+- Finding 존재 자체는 process failure가 아니다.
+
+현재 CLI는 사람이 읽을 수 있는 summary를 제공한다. JSON 또는 SARIF output을 구현한 것으로 주장하지 않는다.
+
+## Pattern Analysis와 Hardcoded Credential
+
+Pattern Analysis는 DataFlow/Taint vulnerability detector와 분리되어 있다. `PatternAnalysis.javaDefaults()`는 Java literal 및 assignment/declaration context를 이용해 Hardcoded Credential(CWE-798) 후보를 찾는다.
+
+- 실제 secret value는 Finding evidence와 일반 문자열 표현에서 redaction한다.
+- placeholder, 명백한 test/example value 및 지원하지 않는 동적 표현은 보수적으로 처리한다.
+- regex나 literal pattern 결과를 source-to-sink taint finding으로 가장하지 않는다.
+- Pattern Finding에는 DataFlow source/sink flow가 없을 수 있다.
+
+## 명시적 제한
+
+현재 구현은 다음을 지원하지 않거나 완전하게 분석하지 않는다.
+
+- compiler-complete Java type checking과 generic type inference
+- Java overload specificity 전체
+- varargs invocation conversion
+- runtime interface implementation 선택
+- runtime override/virtual dispatch
+- external library hierarchy 추론
+- Reflection
+- 완전한 points-to/alias analysis
+- 완전한 field/heap taint
+- path-sensitive analysis
+- 모든 exception path와 resource lifecycle
+- async/reactive flow
+- whole-program call graph 및 상용 SAST 수준 whole-program analysis
+- 모든 Java/Spring/JPA/Hibernate/JDBC overload와 framework behavior
+
+분석은 보수적인 may-taint 모델이다. source에서 증명할 수 없는 target, type, hierarchy 또는 runtime behavior는 추측하지 않고 unsupported/unknown으로 남긴다. duplicate FQN, ambiguous overload 및 동적 dispatch 대상도 임의 선택하지 않는다.
+
+## 요구 사항
+
+- JDK 25
+- Gradle Wrapper
+- Windows에서는 native Tree-sitter binding을 위한 `--enable-native-access=ALL-UNNAMED`
+
+Tree-sitter Java grammar와 Java binding 버전은 `build.gradle.kts`에 고정되어 있다. Tree-sitter는 parsing에만 사용하며 별도의 Java parser로 대체하지 않는다.
+
+## Build와 test
+
+저장소의 `sast` 디렉터리에서 실행한다.
 
 ```powershell
-.\gradlew.bat run --args="scan C:\project\total-backend"
+.\gradlew.bat -g C:\project\total-security\sast\.gradle-user-home clean build --no-daemon
 ```
 
-The CLI prints summary counts and a redacted location-only finding overview. A completed or partial scan exits `0`; an invalid project path or fatal discovery/parser/analysis failure exits nonzero. Findings alone do not make the process fail. Remote Git clone, GitHub API scanning, multiple-repository aggregation, JSON, SARIF, HTML reporting, CI integration, service-to-service flow, compiler-complete resolution, and frontend scanning remain unsupported.
+Gradle 내부 cache와 build output은 `sast/.gitignore`에서 제외한다.
 
-## Pattern analysis and hardcoded credentials
+## Java syntax tree 출력
 
-Pattern Analysis is a separate analysis path from CFG, reaching definitions, taint, and source/sink rules. `PatternAnalysis` runs `PatternDetector` implementations directly over the Tree-sitter-independent `JavaFileInfo` IR. The default registry currently contains only `HardcodedCredentialDetector`; callers can supply additional detectors without coupling them to flow analysis.
-
-The STEP 8 detector combines a supported sensitive identifier with a direct, non-empty Java string literal initializer or assignment. Fields, local variables, and assignments with a stable variable or field target are supported. Identifier normalization splits camelCase, acronym-style camelCase, snake_case, and other non-alphanumeric separators into lower-case words, then compares the complete normalized identifier against a bounded credential vocabulary. It does not use broad substring matching, so names such as `tokenCount` and `passwordEnabled` are not findings.
-
-Only structural `string_literal` IR values containing non-whitespace content are confirmed. Empty and whitespace-only strings, `null`, character/numeric/boolean literals, method-call returns, environment/config/request values, and arbitrary expressions are not treated as hardcoded credentials. Source text is not searched with regular expressions to reconstruct declarations or assignments.
-
-Pattern findings use rule ID `HARDCODED_CREDENTIAL`, vulnerability type `Hardcoded Credential`, CWE `CWE-798`, and detector metadata severity `HIGH`; this severity is not a calculated CVSS score. The primary location points to the literal. Evidence retains the identifier, declaration/assignment kind, literal kind, location, and a redacted reason, but never copies the literal value. Pattern findings intentionally have no fabricated source, sink, or flow. Flow findings and pattern findings share `FindingResult` metadata while retaining evidence models suited to their different analysis methods. Findings are deduplicated by rule ID and literal source location, so distinct assignments remain distinct findings.
-
-This structural detector does not claim to find every secret. AWS access-key formats, GitHub token formats, JWTs, private-key PEM blocks, entropy-based detection, raw source regex scanning, and configuration/YAML/properties scanning remain unsupported. These are future Pattern Analysis extensions rather than taint rules.
-
-## Requirements
-
-- JDK 25 or newer
-
-## Build and test
-
-On Windows:
+하나의 `.java` 파일을 parsing하고 node type, start/end position 및 선택적인 source text를 출력할 수 있다.
 
 ```powershell
-.\gradlew.bat clean build
+.\gradlew.bat -g C:\project\total-security\sast\.gradle-user-home run --args="src/test/resources/fixtures/SampleController.java"
 ```
 
-On Linux or macOS:
-
-```shell
-./gradlew clean build
-```
-
-## Print a Java syntax tree
-
-```powershell
-.\gradlew.bat run --args="src/test/resources/fixtures/SampleController.java"
-```
-
-Raw syntax-tree printer positions are zero-based and use Tree-sitter's `row:column` representation. Source text is printed for named leaf nodes and truncated when it is long.
-
-IR `SourceLocation` positions are consistently **1-based** for lines and columns. Columns are Tree-sitter UTF-8 byte columns converted from zero-based to one-based; they are not UTF-16 character indexes.
+이 출력은 parsing/진단용이다. syntax tree dump 자체가 semantic IR, CFG, DataFlow, Taint 또는 vulnerability Finding을 의미하지 않는다.

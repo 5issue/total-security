@@ -2,7 +2,6 @@ package com.totalsecurity.sast.interprocedural;
 
 import com.totalsecurity.sast.ir.MethodInfo;
 import com.totalsecurity.sast.ir.MethodKind;
-import com.totalsecurity.sast.ir.ParameterInfo;
 import com.totalsecurity.sast.ir.TypeKind;
 import com.totalsecurity.sast.ir.expression.Expression;
 import com.totalsecurity.sast.ir.expression.MethodCallExpression;
@@ -17,9 +16,11 @@ import java.util.Optional;
 /** Resolves exact direct same-class or project-local cross-class calls. */
 public final class CrossClassCallResolver {
     private final ProjectClassIndex index;
+    private final ConservativeTypeCompatibility compatibility;
 
     public CrossClassCallResolver(ProjectClassIndex index) {
         this.index = Objects.requireNonNull(index, "index");
+        this.compatibility = new ConservativeTypeCompatibility(index);
     }
 
     public ProjectCallResolution resolve(
@@ -30,7 +31,8 @@ public final class CrossClassCallResolver {
         CallSiteContext context = contexts.resolve(call);
         if (isSameClassSyntax(context, callerType)) {
             Optional<SameClassCallResolution> same = new SameClassCallResolver(
-                    callerType.file(), callerType.type()).resolve(caller.method(), call, contexts);
+                    callerType.file(), callerType.type(), index)
+                    .resolve(caller.method(), call, contexts);
             if (same.isEmpty()) {
                 return unsupported(caller, call, UnsupportedInterproceduralReason.UNKNOWN_TARGET_METHOD,
                         "No method named " + context.methodName() + " is declared by "
@@ -130,7 +132,7 @@ public final class CrossClassCallResolver {
                 && context.receiverQualifiedType().filter(callerType.qualifiedName()::equals).isPresent();
     }
 
-    private static Optional<MethodInfo> resolveOverload(
+    private Optional<MethodInfo> resolveOverload(
             ProjectClassEntry owner,
             CallSiteContext context,
             ProjectMethodId caller,
@@ -143,21 +145,31 @@ public final class CrossClassCallResolver {
                 .filter(method -> method.parameters().size() == context.argumentCount())
                 .toList();
         if (sameArity.size() == 1
-                && !hasKnownTypeMismatch(context, sameArity.getFirst(), owner.file())) {
+                && !hasKnownTypeMismatch(context, sameArity.getFirst(), owner)) {
             return Optional.of(sameArity.getFirst());
         }
         if (sameArity.size() > 1) {
             List<MethodInfo> exact = sameArity.stream()
-                    .filter(method -> exactTypes(context, method, owner.file()))
+                    .filter(method -> exactTypes(context, method, owner))
                     .toList();
             if (exact.size() == 1) {
                 return Optional.of(exact.getFirst());
+            }
+            List<MethodInfo> compatible = sameArity.stream()
+                    .filter(method -> match(context, method, owner)
+                            == ConservativeTypeCompatibility.Match.COMPATIBLE)
+                    .toList();
+            boolean unknown = sameArity.stream()
+                    .anyMatch(method -> match(context, method, owner)
+                            == ConservativeTypeCompatibility.Match.UNKNOWN);
+            if (compatible.size() == 1 && !unknown) {
+                return Optional.of(compatible.getFirst());
             }
         }
         return Optional.empty();
     }
 
-    private static ProjectCallResolution overloadFailure(
+    private ProjectCallResolution overloadFailure(
             ProjectClassEntry owner,
             CallSiteContext context,
             ProjectMethodId caller,
@@ -175,21 +187,25 @@ public final class CrossClassCallResolver {
                     "No overload has argument count " + context.argumentCount());
         }
         if (sameArity.size() == 1
-                && hasKnownTypeMismatch(context, sameArity.getFirst(), owner.file())) {
+                && hasKnownTypeMismatch(context, sameArity.getFirst(), owner)) {
             return unsupported(caller, call,
                     UnsupportedInterproceduralReason.INCOMPATIBLE_ARGUMENT_TYPE,
                     "Known argument type is incompatible with the project method");
         }
-        LightweightTypeContext targetTypes = new LightweightTypeContext(owner.file());
-        boolean unknown = context.argumentQualifiedTypes().stream().anyMatch(Optional::isEmpty)
-                || sameArity.stream().flatMap(method -> method.parameters().stream())
-                        .map(ParameterInfo::type)
-                        .map(targetTypes::qualifyTypeShape)
-                        .anyMatch(Optional::isEmpty);
+        List<MethodInfo> compatible = sameArity.stream()
+                .filter(method -> match(context, method, owner)
+                        == ConservativeTypeCompatibility.Match.COMPATIBLE)
+                .toList();
+        boolean unknown = sameArity.stream()
+                .anyMatch(method -> match(context, method, owner)
+                        == ConservativeTypeCompatibility.Match.UNKNOWN);
         return unsupported(caller, call,
-                unknown ? UnsupportedInterproceduralReason.UNKNOWN_ARGUMENT_TYPE
-                        : UnsupportedInterproceduralReason.AMBIGUOUS_OVERLOAD,
-                "Project overload cannot be resolved uniquely by exact lightweight types");
+                compatible.size() >= 2
+                        ? UnsupportedInterproceduralReason.AMBIGUOUS_OVERLOAD
+                        : unknown
+                                ? UnsupportedInterproceduralReason.UNKNOWN_ARGUMENT_TYPE
+                                : UnsupportedInterproceduralReason.INCOMPATIBLE_ARGUMENT_TYPE,
+                "Project overload cannot be resolved uniquely by conservative lightweight types");
     }
 
     private static List<MethodInfo> named(ProjectClassEntry owner, CallSiteContext context) {
@@ -199,30 +215,56 @@ public final class CrossClassCallResolver {
                 .toList();
     }
 
-    private static boolean exactTypes(
-            CallSiteContext context, MethodInfo method, com.totalsecurity.sast.ir.JavaFileInfo file) {
-        LightweightTypeContext types = new LightweightTypeContext(file);
+    private boolean exactTypes(
+            CallSiteContext context, MethodInfo method, ProjectClassEntry owner) {
+        LightweightTypeContext types = new LightweightTypeContext(owner.file(), index::contains);
         for (int index = 0; index < context.argumentCount(); index++) {
             Optional<String> argument = context.argumentQualifiedTypes().get(index);
-            Optional<String> parameter = types.qualifyTypeShape(method.parameters().get(index).type());
-            if (argument.isEmpty() || parameter.isEmpty() || !argument.equals(parameter)) {
+            if (argument.isEmpty()
+                    || !compatibility.isExact(
+                            argument.orElseThrow(), method, index, types)) {
                 return false;
             }
         }
         return true;
     }
 
-    private static boolean hasKnownTypeMismatch(
-            CallSiteContext context, MethodInfo method, com.totalsecurity.sast.ir.JavaFileInfo file) {
-        LightweightTypeContext types = new LightweightTypeContext(file);
+    private boolean hasKnownTypeMismatch(
+            CallSiteContext context, MethodInfo method, ProjectClassEntry owner) {
+        LightweightTypeContext types = new LightweightTypeContext(owner.file(), index::contains);
         for (int index = 0; index < context.argumentCount(); index++) {
             Optional<String> argument = context.argumentQualifiedTypes().get(index);
-            Optional<String> parameter = types.qualifyTypeShape(method.parameters().get(index).type());
-            if (argument.isPresent() && parameter.isPresent() && !argument.equals(parameter)) {
+            if (argument.isPresent()
+                    && compatibility.match(argument.orElseThrow(), method, index, types)
+                            == ConservativeTypeCompatibility.Match.INCOMPATIBLE) {
                 return true;
             }
         }
         return false;
+    }
+
+    private ConservativeTypeCompatibility.Match match(
+            CallSiteContext context, MethodInfo method, ProjectClassEntry owner) {
+        LightweightTypeContext types = new LightweightTypeContext(owner.file(), index::contains);
+        boolean unknown = false;
+        for (int index = 0; index < context.argumentCount(); index++) {
+            Optional<String> argument = context.argumentQualifiedTypes().get(index);
+            if (argument.isEmpty()) {
+                unknown = true;
+                continue;
+            }
+            ConservativeTypeCompatibility.Match current = compatibility.match(
+                    argument.orElseThrow(), method, index, types);
+            if (current == ConservativeTypeCompatibility.Match.INCOMPATIBLE) {
+                return current;
+            }
+            if (current == ConservativeTypeCompatibility.Match.UNKNOWN) {
+                unknown = true;
+            }
+        }
+        return unknown
+                ? ConservativeTypeCompatibility.Match.UNKNOWN
+                : ConservativeTypeCompatibility.Match.COMPATIBLE;
     }
 
     private static String simpleName(String declaredType) {

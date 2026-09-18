@@ -11,6 +11,7 @@ import com.totalsecurity.sast.ir.ParameterInfo;
 import com.totalsecurity.sast.ir.ReturnInfo;
 import com.totalsecurity.sast.ir.SourceLocation;
 import com.totalsecurity.sast.ir.TypeKind;
+import com.totalsecurity.sast.ir.TypeParameterInfo;
 import com.totalsecurity.sast.ir.VariableInfo;
 import com.totalsecurity.sast.ir.VariableKind;
 import com.totalsecurity.sast.ir.expression.AssignmentExpression;
@@ -89,6 +90,9 @@ public final class JavaSemanticExtractor {
 
     private ClassInfo extractType(TSNode declaration, TypeKind kind) {
         String name = field(declaration, "name").map(this::text).orElse("<unnamed>");
+        List<String> extendsTypes = extractDeclaredSupertypes(
+                declaration, "superclass", "extends_interfaces");
+        List<String> implementsTypes = extractDeclaredSupertypes(declaration, "super_interfaces");
         List<AnnotationInfo> annotations = extractAnnotations(declaration);
         List<VariableInfo> fields = new ArrayList<>();
         List<MethodInfo> methods = new ArrayList<>();
@@ -108,7 +112,15 @@ public final class JavaSemanticExtractor {
             }
         });
 
-        return new ClassInfo(kind, name, annotations, fields, methods, location(declaration));
+        return new ClassInfo(
+                kind,
+                name,
+                extendsTypes,
+                implementsTypes,
+                annotations,
+                fields,
+                methods,
+                location(declaration));
     }
 
     private MethodInfo extractMethod(TSNode declaration, MethodKind kind) {
@@ -128,6 +140,7 @@ public final class JavaSemanticExtractor {
                 kind,
                 name,
                 returnType,
+                extractTypeParameters(declaration),
                 extractAnnotations(declaration),
                 parameters,
                 contents.localVariables,
@@ -136,6 +149,53 @@ public final class JavaSemanticExtractor {
                 contents.returns,
                 body,
                 location(declaration));
+    }
+
+    private List<String> extractDeclaredSupertypes(TSNode declaration, String... relationTypes) {
+        List<String> result = new ArrayList<>();
+        for (TSNode child : namedChildren(declaration)) {
+            boolean matches = false;
+            for (String relationType : relationTypes) {
+                if (child.getType().equals(relationType)) {
+                    matches = true;
+                    break;
+                }
+            }
+            if (!matches) {
+                continue;
+            }
+            for (TSNode relationChild : namedChildren(child)) {
+                if (relationChild.getType().equals("type_list")) {
+                    namedChildren(relationChild).forEach(type -> result.add(text(type)));
+                } else {
+                    result.add(text(relationChild));
+                }
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private List<TypeParameterInfo> extractTypeParameters(TSNode declaration) {
+        return field(declaration, "type_parameters")
+                .map(parameters -> namedChildren(parameters).stream()
+                        .filter(parameter -> parameter.getType().equals("type_parameter"))
+                        .map(this::extractTypeParameter)
+                        .toList())
+                .orElseGet(List::of);
+    }
+
+    private TypeParameterInfo extractTypeParameter(TSNode parameter) {
+        String name = namedChildren(parameter).stream()
+                .filter(child -> child.getType().equals("type_identifier"))
+                .findFirst()
+                .map(this::text)
+                .orElse("<unnamed>");
+        List<String> bounds = namedChildren(parameter).stream()
+                .filter(child -> child.getType().equals("type_bound"))
+                .flatMap(bound -> namedChildren(bound).stream())
+                .map(this::text)
+                .toList();
+        return new TypeParameterInfo(name, bounds, location(parameter));
     }
 
     private BlockStatement extractBlock(TSNode block) {

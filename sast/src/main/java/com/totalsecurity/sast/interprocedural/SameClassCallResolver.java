@@ -4,14 +4,12 @@ import com.totalsecurity.sast.ir.ClassInfo;
 import com.totalsecurity.sast.ir.JavaFileInfo;
 import com.totalsecurity.sast.ir.MethodInfo;
 import com.totalsecurity.sast.ir.MethodKind;
-import com.totalsecurity.sast.ir.ParameterInfo;
 import com.totalsecurity.sast.ir.expression.Expression;
 import com.totalsecurity.sast.ir.expression.MethodCallExpression;
 import com.totalsecurity.sast.ir.expression.VariableReference;
 import com.totalsecurity.sast.rule.context.CallSiteContext;
 import com.totalsecurity.sast.rule.context.CallSiteContextResolver;
 import com.totalsecurity.sast.rule.context.LightweightTypeContext;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -21,11 +19,18 @@ public final class SameClassCallResolver {
     private final JavaFileInfo file;
     private final ClassInfo type;
     private final LightweightTypeContext types;
+    private final ConservativeTypeCompatibility compatibility;
 
     public SameClassCallResolver(JavaFileInfo file, ClassInfo type) {
+        this(file, type, new ProjectClassIndex(List.of(file)));
+    }
+
+    SameClassCallResolver(JavaFileInfo file, ClassInfo type, ProjectClassIndex project) {
         this.file = Objects.requireNonNull(file, "file");
         this.type = Objects.requireNonNull(type, "type");
-        this.types = new LightweightTypeContext(file);
+        ProjectClassIndex checkedProject = Objects.requireNonNull(project, "project");
+        this.types = new LightweightTypeContext(file, checkedProject::contains);
+        this.compatibility = new ConservativeTypeCompatibility(checkedProject);
     }
 
     public Optional<SameClassCallResolution> resolve(
@@ -68,16 +73,23 @@ public final class SameClassCallResolver {
         if (exact.size() == 1) {
             return Optional.of(resolved(caller, call, exact.getFirst()));
         }
-        boolean unknownType = context.argumentQualifiedTypes().stream().anyMatch(Optional::isEmpty)
-                || sameArity.stream().flatMap(method -> method.parameters().stream())
-                        .map(ParameterInfo::type)
-                        .map(types::qualifyTypeShape)
-                        .anyMatch(Optional::isEmpty);
-        UnsupportedInterproceduralReason reason = unknownType
-                ? UnsupportedInterproceduralReason.UNKNOWN_ARGUMENT_TYPE
-                : UnsupportedInterproceduralReason.AMBIGUOUS_OVERLOAD;
+        List<MethodInfo> compatible = sameArity.stream()
+                .filter(method -> match(context, method)
+                        == ConservativeTypeCompatibility.Match.COMPATIBLE)
+                .toList();
+        boolean unknownType = sameArity.stream()
+                .anyMatch(method -> match(context, method)
+                        == ConservativeTypeCompatibility.Match.UNKNOWN);
+        if (compatible.size() == 1 && !unknownType) {
+            return Optional.of(resolved(caller, call, compatible.getFirst()));
+        }
+        UnsupportedInterproceduralReason reason = compatible.size() >= 2
+                ? UnsupportedInterproceduralReason.AMBIGUOUS_OVERLOAD
+                : unknownType
+                        ? UnsupportedInterproceduralReason.UNKNOWN_ARGUMENT_TYPE
+                        : UnsupportedInterproceduralReason.INCOMPATIBLE_ARGUMENT_TYPE;
         return Optional.of(unsupported(caller, call, reason,
-                "Same-class overload cannot be resolved uniquely by exact lightweight types"));
+                "Same-class overload cannot be resolved uniquely by conservative lightweight types"));
     }
 
     private Optional<UnsupportedInterproceduralReason> receiverProblem(CallSiteContext context) {
@@ -108,14 +120,10 @@ public final class SameClassCallResolver {
 
     private boolean exactTypes(CallSiteContext context, MethodInfo method) {
         List<Optional<String>> arguments = context.argumentQualifiedTypes();
-        List<Optional<String>> parameters = method.parameters().stream()
-                .map(ParameterInfo::type)
-                .map(types::qualifyTypeShape)
-                .toList();
         for (int index = 0; index < arguments.size(); index++) {
             if (arguments.get(index).isEmpty()
-                    || parameters.get(index).isEmpty()
-                    || !arguments.get(index).equals(parameters.get(index))) {
+                    || !compatibility.isExact(
+                            arguments.get(index).orElseThrow(), method, index, types)) {
                 return false;
             }
         }
@@ -125,14 +133,36 @@ public final class SameClassCallResolver {
     private boolean hasKnownTypeMismatch(CallSiteContext context, MethodInfo method) {
         for (int index = 0; index < context.argumentCount(); index++) {
             Optional<String> argument = context.argumentQualifiedTypes().get(index);
-            Optional<String> parameter =
-                    types.qualifyTypeShape(method.parameters().get(index).type());
-            if (argument.isPresent() && parameter.isPresent()
-                    && !argument.orElseThrow().equals(parameter.orElseThrow())) {
+            if (argument.isPresent()
+                    && compatibility.match(argument.orElseThrow(), method, index, types)
+                            == ConservativeTypeCompatibility.Match.INCOMPATIBLE) {
                 return true;
             }
         }
         return false;
+    }
+
+    private ConservativeTypeCompatibility.Match match(
+            CallSiteContext context, MethodInfo method) {
+        boolean unknown = false;
+        for (int index = 0; index < context.argumentCount(); index++) {
+            Optional<String> argument = context.argumentQualifiedTypes().get(index);
+            if (argument.isEmpty()) {
+                unknown = true;
+                continue;
+            }
+            ConservativeTypeCompatibility.Match current = compatibility.match(
+                    argument.orElseThrow(), method, index, types);
+            if (current == ConservativeTypeCompatibility.Match.INCOMPATIBLE) {
+                return current;
+            }
+            if (current == ConservativeTypeCompatibility.Match.UNKNOWN) {
+                unknown = true;
+            }
+        }
+        return unknown
+                ? ConservativeTypeCompatibility.Match.UNKNOWN
+                : ConservativeTypeCompatibility.Match.COMPATIBLE;
     }
 
     private static SameClassCallResolution resolved(

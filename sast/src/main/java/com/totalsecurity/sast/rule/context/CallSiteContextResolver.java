@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /** Resolves only direct declarations and imports already represented in the Java IR. */
 public final class CallSiteContextResolver {
@@ -49,6 +50,15 @@ public final class CallSiteContextResolver {
             ClassInfo enclosingClass,
             MethodInfo enclosingMethod,
             DataFlowResult dataFlow) {
+        this(file, enclosingClass, enclosingMethod, dataFlow, ignored -> false);
+    }
+
+    public CallSiteContextResolver(
+            JavaFileInfo file,
+            ClassInfo enclosingClass,
+            MethodInfo enclosingMethod,
+            DataFlowResult dataFlow,
+            Predicate<String> projectTypeExists) {
         this.file = Objects.requireNonNull(file, "file");
         this.enclosingClass = Objects.requireNonNull(enclosingClass, "enclosingClass");
         this.enclosingMethod = Objects.requireNonNull(enclosingMethod, "enclosingMethod");
@@ -56,7 +66,7 @@ public final class CallSiteContextResolver {
         if (!dataFlow.graph().method().equals(enclosingMethod)) {
             throw new IllegalArgumentException("DataFlowResult belongs to a different method");
         }
-        this.types = new LightweightTypeContext(file);
+        this.types = new LightweightTypeContext(file, projectTypeExists);
     }
 
     public LightweightTypeContext types() {

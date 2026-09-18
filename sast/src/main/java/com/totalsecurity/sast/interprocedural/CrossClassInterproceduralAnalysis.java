@@ -149,7 +149,7 @@ public final class CrossClassInterproceduralAnalysis {
                 result.put(id, new MethodArtifacts(
                         owner, dataFlow,
                         new CallSiteContextResolver(
-                                owner.file(), owner.type(), method, dataFlow)));
+                                owner.file(), owner.type(), method, dataFlow, index::contains)));
             }
         }
         return result;

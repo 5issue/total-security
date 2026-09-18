@@ -1,17 +1,31 @@
 package com.totalsecurity.sast.rule.context;
 
 import com.totalsecurity.sast.ir.JavaFileInfo;
-import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Predicate;
 
 /** Conservative import-aware name qualification without compiler symbol resolution. */
 public final class LightweightTypeContext {
+    private static final Set<String> IMPLICIT_JAVA_LANG_TYPES = Set.of(
+            "Boolean", "Byte", "Character", "Class", "Double", "Enum", "Exception",
+            "Float", "Integer", "Iterable", "Long", "Number", "Object", "Runtime",
+            "RuntimeException", "Short", "String", "StringBuilder", "StringBuffer",
+            "System", "Throwable", "Void");
+
     private final JavaFileInfo file;
+    private final Predicate<String> projectTypeExists;
 
     public LightweightTypeContext(JavaFileInfo file) {
+        this(file, ignored -> false);
+    }
+
+    public LightweightTypeContext(JavaFileInfo file, Predicate<String> projectTypeExists) {
         this.file = Objects.requireNonNull(file, "file");
+        this.projectTypeExists = Objects.requireNonNull(projectTypeExists, "projectTypeExists");
     }
 
     public JavaFileInfo file() {
@@ -26,12 +40,12 @@ public final class LightweightTypeContext {
         if (type.contains(".")) {
             return Optional.of(type);
         }
-        List<String> candidates = new ArrayList<>();
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
         for (String imported : file.imports()) {
             if (imported.startsWith("static ")) {
                 continue;
             }
-            if (imported.endsWith("." + type)) {
+            if (!imported.endsWith(".*") && imported.endsWith("." + type)) {
                 candidates.add(imported);
             }
         }
@@ -42,29 +56,33 @@ public final class LightweightTypeContext {
             return Optional.empty();
         }
 
-        Optional<String> declaredHere = file.types().stream()
-                .filter(candidate -> candidate.name().equals(type))
-                .findFirst()
-                .map(candidate -> file.packageName()
-                        .map(packageName -> packageName + "." + candidate.name())
-                        .orElse(candidate.name()));
-        if (declaredHere.isPresent()) {
-            return declaredHere;
-        }
-
-        if (type.equals("String") || type.equals("Runtime") || type.equals("Object")) {
+        if (IMPLICIT_JAVA_LANG_TYPES.contains(type)) {
             return Optional.of("java.lang." + type);
         }
 
-        List<String> wildcardPackages = file.imports().stream()
+        Optional<String> samePackage = file.packageName()
+                .map(packageName -> packageName + "." + type)
+                .filter(this::isKnownProjectType);
+        if (samePackage.isPresent()) {
+            return samePackage;
+        }
+        if (file.packageName().isEmpty()
+                && file.types().stream().anyMatch(candidate -> candidate.name().equals(type))) {
+            return Optional.of(type);
+        }
+
+        List<String> wildcardCandidates = file.imports().stream()
                 .filter(imported -> !imported.startsWith("static "))
                 .filter(imported -> imported.endsWith(".*"))
                 .map(imported -> imported.substring(0, imported.length() - 2))
+                .map(packageName -> packageName + "." + type)
+                .filter(this::isKnownProjectType)
+                .distinct()
                 .toList();
-        if (wildcardPackages.size() == 1) {
-            return Optional.of(wildcardPackages.getFirst() + "." + type);
+        if (wildcardCandidates.size() == 1) {
+            return Optional.of(wildcardCandidates.getFirst());
         }
-        return file.packageName().map(packageName -> packageName + "." + type);
+        return Optional.empty();
     }
 
     /** Qualifies a declared type while retaining array dimensions for overload filtering. */
@@ -139,5 +157,17 @@ public final class LightweightTypeContext {
             case "boolean", "byte", "short", "int", "long", "char", "float", "double", "void" -> true;
             default -> false;
         };
+    }
+
+    private boolean isKnownProjectType(String qualifiedName) {
+        if (projectTypeExists.test(qualifiedName)) {
+            return true;
+        }
+        return file.types().stream().anyMatch(candidate -> {
+            String declared = file.packageName()
+                    .map(packageName -> packageName + "." + candidate.name())
+                    .orElse(candidate.name());
+            return declared.equals(qualifiedName);
+        });
     }
 }
