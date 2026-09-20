@@ -212,17 +212,9 @@ def check_1_10_password_policy(iam):
     return [make_result("1.10", "AWS 계정 패스워드 정책 관리", status, str(p))]
 
 
-def check_2_3_service_policies():
-    # 2.1(인스턴스 서비스)·2.2(네트워크 서비스)는 2026-09-13 확정되어 eks_checks.py로
-    # 이전됨(EKS 노드그룹/NAT 역할 정책 대조, ALB IRSA 대조 — 별도 K8s/EKS API 접근 필요).
-    # 2.3(기타 서비스 KMS/S3/SecretManager)은 2026-09-11 baseline 확보됐으나 IAM
-    # 역할-서비스 매핑 규칙이 아직 미정이라 이 자리는 SERVICE_IAM_POLICY_MAP TODO로 유지.
-    if config.SERVICE_IAM_POLICY_MAP is not None:
-        status, detail = "REVIEW", "서비스별 IAM 정책 매핑 존재 — 실제 IAM 정책과 대조 필요"
-    else:
-        status = "SKIP"
-        detail = "서비스 역할별 필요권한 정의서(config.SERVICE_IAM_POLICY_MAP) 미확정"
-    return [make_result("2.3", "기타 서비스 정책 관리", status, detail)]
+# 2.3(기타 서비스 KMS/S3/SecretManager)은 2026-09-13에 2.1/2.2와 함께 eks_checks.py로
+# 이전됨 — backend-common-sa의 IRSA role-arn을 K8s ServiceAccount에서 조회해야 해서
+# 2.1/2.2와 동일하게 K8s API 접근이 필요하다(check_2_3_service_policies 참고).
 
 
 def run_all(iam, ec2, configservice):
@@ -237,5 +229,4 @@ def run_all(iam, ec2, configservice):
     results += check_1_8_access_key_lifecycle(configservice)
     results += check_1_9_mfa(iam)
     results += check_1_10_password_policy(iam)
-    results += check_2_3_service_policies()
     return results
