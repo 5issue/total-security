@@ -17,6 +17,8 @@
   ansible.builtin.set_fact:
     mysql_login_user: ""
     mysql_login_password: ""
+    mysql_admin_user: ""
+    mysql_admin_password: ""
 
 - name: "{{ db_conn.service }} | K8s Secret에서 자격증명 조회"
   # ⚠ 2026-09-14 인프라팀 회신 — MySQL은 서비스별 개별 Secret이 아니라 공용 Secret
@@ -32,6 +34,19 @@
   when: db_conn.secret_ref is not none and mysql_account_name is not none
   ignore_errors: true
 
+- name: "{{ db_conn.service }} | K8s Secret에서 관리자(admin) 자격증명 조회"
+  # 2026-09-20 인프라팀 회신(트래킹표 1번) — D-01/02/04/06/08/11/21은 mysql.* 시스템
+  # 테이블 전체를 봐야 해서 위 서비스 앱 계정 대신 이 admin 계정으로 조회한다.
+  # group_vars/all.yml의 dbms_admin_connections.mysql 주석 참고(Secret 키 이름은 MOCO
+  # 표준 포맷으로 가정 — 확신 없는 값, 실패 시 실제 키부터 확인).
+  vars:
+    mysql_admin_secret_data: "{{ lookup('kubernetes.core.k8s', kind='Secret', name=dbms_admin_connections.mysql.secret_ref, namespace=dbms_admin_connections.mysql.namespace | default('default')).data | default({}) }}"
+  ansible.builtin.set_fact:
+    mysql_admin_user: "{{ dbms_admin_connections.mysql.secret_username }}"
+    mysql_admin_password: "{{ mysql_admin_secret_data[dbms_admin_connections.mysql.secret_password_key] | b64decode }}"
+  when: dbms_admin_connections.mysql.secret_ref is not none
+  ignore_errors: true
+
 # -----------------------------------------------------------------------------
 # D-01 | 기본 계정 잠금 상태 (root@localhost)
 # -----------------------------------------------------------------------------
@@ -39,8 +54,8 @@
   community.mysql.mysql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ mysql_login_user }}"
-    login_password: "{{ mysql_login_password }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
     query: "SELECT account_locked FROM mysql.user WHERE user='root' AND host='localhost'"
   register: d01_raw
   failed_when: false
@@ -61,23 +76,24 @@
   community.mysql.mysql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ mysql_login_user }}"
-    login_password: "{{ mysql_login_password }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
     query: "SELECT user, host FROM mysql.user WHERE user NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')"
   register: d02_raw
   failed_when: false
 
 - name: "{{ db_conn.service }} | D-02 판정 기록"
   vars:
+    d02_query_ok: "{{ d02_raw.query_result is defined }}"
     d02_accounts: "{{ d02_raw.query_result | default([]) | first | default([]) }}"
     d02_unauthorized: "{{ d02_accounts | rejectattr('user', 'in', d02_unnecessary_account_whitelist | default([])) | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-02', 'item': '데이터베이스의 불필요 계정을 제거하거나, 잠금설정 후 사용', 'target': db_conn.service,
-      'status': 'SKIP' if d02_unnecessary_account_whitelist is none else ('PASS' if d02_unauthorized | length == 0 else 'FAIL'),
+      'status': 'SKIP' if d02_unnecessary_account_whitelist is none else ('PASS' if (d02_query_ok and d02_unauthorized | length == 0) else 'FAIL'),
       'detail': (
         '전체 계정(화이트리스트 TODO, 참고용): ' ~ (d02_accounts | string | truncate(150) if d02_accounts | length > 0 else '없음') if d02_unnecessary_account_whitelist is none
-        else '화이트리스트 외 계정: ' ~ (d02_unauthorized | string | truncate(150) if d02_unauthorized | length > 0 else '없음')
+        else ('조회 실패' if not d02_query_ok else '화이트리스트 외 계정: ' ~ (d02_unauthorized | string | truncate(150) if d02_unauthorized | length > 0 else '없음'))
       )
     }] }}"
 
@@ -122,8 +138,8 @@
   community.mysql.mysql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ mysql_login_user }}"
-    login_password: "{{ mysql_login_password }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
     query: >-
       SELECT grantee FROM information_schema.user_privileges
       WHERE privilege_type IN ('SUPER','SYSTEM_USER') AND grantee NOT LIKE "'root'@%"
@@ -133,15 +149,16 @@
 
 - name: "{{ db_conn.service }} | D-04 판정 기록"
   vars:
+    d04_query_ok: "{{ d04_raw.query_result is defined }}"
     d04_admins: "{{ d04_raw.query_result | default([]) | first | default([]) | map(attribute='grantee') | list }}"
     d04_unauthorized: "{{ d04_admins | difference(d04_admin_account_whitelist | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-04', 'item': '데이터베이스 관리자 권한을 꼭 필요한 계정 및 그룹에 대해서만 허용', 'target': db_conn.service,
-      'status': 'SKIP' if d04_admin_account_whitelist is none else ('PASS' if d04_unauthorized | length == 0 else 'FAIL'),
+      'status': 'SKIP' if d04_admin_account_whitelist is none else ('PASS' if (d04_query_ok and d04_unauthorized | length == 0) else 'FAIL'),
       'detail': (
         'SUPER/SYSTEM_USER 보유 계정(화이트리스트 TODO, 참고용): ' ~ (d04_admins | join(', ') if d04_admins | length > 0 else '없음') if d04_admin_account_whitelist is none
-        else '화이트리스트 외 관리자 권한 계정: ' ~ (d04_unauthorized | join(', ') if d04_unauthorized | length > 0 else '없음')
+        else ('조회 실패' if not d04_query_ok else '화이트리스트 외 관리자 권한 계정: ' ~ (d04_unauthorized | join(', ') if d04_unauthorized | length > 0 else '없음'))
       )
     }] }}"
 
@@ -186,14 +203,15 @@
   community.mysql.mysql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ mysql_login_user }}"
-    login_password: "{{ mysql_login_password }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
     query: "SELECT DISTINCT user FROM mysql.user WHERE user NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')"
   register: d06_raw
   failed_when: false
 
 - name: "{{ db_conn.service }} | D-06 판정 기록"
   vars:
+    d06_query_ok: "{{ d06_raw.query_result is defined }}"
     d06_users: "{{ d06_raw.query_result | default([]) | first | default([]) | map(attribute='user') | list }}"
     d06_expected: "{{ dbms_service_accounts | selectattr('database', 'equalto', db_conn.service) | map(attribute='account') | list }}"
     d06_unexpected: "{{ d06_users | difference(d06_expected) }}"
@@ -201,11 +219,11 @@
     check_results: "{{ check_results + [{
       'id': 'D-06', 'item': 'DB 사용자 계정을 개별적으로 부여하여 사용', 'target': db_conn.service,
       'status': (
-        'REVIEW' if d06_expected | length == 0 else ('PASS' if d06_unexpected | length == 0 else 'FAIL')
+        'REVIEW' if d06_expected | length == 0 else ('PASS' if (d06_query_ok and d06_unexpected | length == 0) else 'FAIL')
       ),
       'detail': (
         'dbms_service_accounts에 이 DB(' ~ db_conn.service ~ ')에 매핑된 계정 없음 — group_vars 매핑 확인 필요. 전체 계정: ' ~ (d06_users | join(', ') if d06_users | length > 0 else '없음') if d06_expected | length == 0
-        else '기대 계정(' ~ (d06_expected | join(', ')) ~ ') 외 계정 발견: ' ~ (d06_unexpected | join(', ') if d06_unexpected | length > 0 else '없음')
+        else ('조회 실패' if not d06_query_ok else '기대 계정(' ~ (d06_expected | join(', ')) ~ ') 외 계정 발견: ' ~ (d06_unexpected | join(', ') if d06_unexpected | length > 0 else '없음'))
       )
     }] }}"
 
@@ -216,8 +234,8 @@
   community.mysql.mysql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ mysql_login_user }}"
-    login_password: "{{ mysql_login_password }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
     query: "SELECT user, host, plugin FROM mysql.user WHERE plugin NOT IN ('caching_sha2_password','sha256_password')"
   register: d08_raw
   failed_when: false
@@ -229,7 +247,7 @@
     check_results: "{{ check_results + [{
       'id': 'D-08', 'item': '안전한 암호화 알고리즘 사용', 'target': db_conn.service,
       'status': 'PASS' if (d08_raw.query_result is defined and d08_weak | length == 0) else 'FAIL',
-      'detail': '취약 플러그인 사용 계정: ' ~ (d08_weak | string | truncate(150) if d08_weak | length > 0 else '없음')
+      'detail': '조회 실패' if d08_raw.query_result is not defined else ('취약 플러그인 사용 계정: ' ~ (d08_weak | string | truncate(150) if d08_weak | length > 0 else '없음'))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -296,8 +314,8 @@
   community.mysql.mysql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ mysql_login_user }}"
-    login_password: "{{ mysql_login_password }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
     query: "SELECT grantee, table_schema FROM information_schema.schema_privileges WHERE table_schema='mysql' AND grantee NOT LIKE \"'root'@%\""
   register: d11_raw
   failed_when: false
@@ -309,7 +327,7 @@
     check_results: "{{ check_results + [{
       'id': 'D-11', 'item': '시스템 테이블 접근 제한', 'target': db_conn.service,
       'status': 'PASS' if (d11_raw.query_result is defined and d11_extra | length == 0) else 'FAIL',
-      'detail': '비관리자 접근 권한: ' ~ (d11_extra | string | truncate(150) if d11_extra | length > 0 else '없음')
+      'detail': '조회 실패' if d11_raw.query_result is not defined else ('비관리자 접근 권한: ' ~ (d11_extra | string | truncate(150) if d11_extra | length > 0 else '없음'))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -357,21 +375,22 @@
   community.mysql.mysql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ mysql_login_user }}"
-    login_password: "{{ mysql_login_password }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
     query: "SELECT grantee FROM information_schema.user_privileges WHERE is_grantable='YES'"
   register: d21_raw
   failed_when: false
 
 - name: "{{ db_conn.service }} | D-21 판정 기록"
   vars:
+    d21_query_ok: "{{ d21_raw.query_result is defined }}"
     d21_grantees: "{{ d21_raw.query_result | default([]) | first | default([]) | map(attribute='grantee') | map('regex_replace', \"^'([^']*)'@.*$\", '\\1') | list | unique }}"
     d21_unauthorized: "{{ d21_grantees | difference(d21_grant_option_admin_whitelist | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-21', 'item': '인가되지 않은 GRANT OPTION 사용 제한', 'target': db_conn.service,
-      'status': 'PASS' if d21_unauthorized | length == 0 else 'FAIL',
-      'detail': 'GRANT OPTION 보유 계정: ' ~ (d21_grantees | join(', ') if d21_grantees | length > 0 else '없음') ~ ' / 화이트리스트(' ~ (d21_grant_option_admin_whitelist | join(', ')) ~ ') 외: ' ~ (d21_unauthorized | join(', ') if d21_unauthorized | length > 0 else '없음')
+      'status': 'PASS' if (d21_query_ok and d21_unauthorized | length == 0) else 'FAIL',
+      'detail': '조회 실패' if not d21_query_ok else ('GRANT OPTION 보유 계정: ' ~ (d21_grantees | join(', ') if d21_grantees | length > 0 else '없음') ~ ' / 화이트리스트(' ~ (d21_grant_option_admin_whitelist | join(', ')) ~ ') 외: ' ~ (d21_unauthorized | join(', ') if d21_unauthorized | length > 0 else '없음'))
     }] }}"
 
 # D-25(주기적 보안 패치)는 2026-09-14 인프라팀 회신으로 DB 파드 내부 apt 조회 기반으로
