@@ -7,12 +7,12 @@ AWS CLI/boto3 read-only API로 클라우드 시트(1.x~4.x, 41개 항목)를 점
 
 | 모듈 | 대상 항목 | 비고 |
 |---|---|---|
-| `checks/iam_checks.py` | 1.1~1.10, 2.3 | IAM 사용자·그룹·Access Key·MFA·패스워드 정책, 기타 서비스(KMS/S3/SecretManager) IAM 정책 |
+| `checks/iam_checks.py` | 1.1~1.10 | IAM 사용자·그룹·Access Key·MFA·패스워드 정책 |
 | `checks/network_checks.py` | 3.1~3.6 | 보안그룹·NACL·라우팅테이블·IGW·NAT |
 | `checks/storage_checks.py` | 3.7~3.8, 4.1~4.3, 4.9~4.10 | S3/EBS/RDS 접근·암호화 |
 | `checks/logging_checks.py` | 4.4~4.8, 4.11~4.12 | 통신구간·CloudTrail·CloudWatch·VPC 플로우로그, 보관기간 |
 | `checks/elb_checks.py` | 3.10 | ALB 제어정책(리스너/SSL Policy/액세스로그/Deletion Protection/헬스체크/보안그룹/Cross-Zone) |
-| `checks/eks_checks.py` | 1.11~1.13, 2.1~2.2, 3.9, 4.14~4.15 | boto3 + kubernetes 파이썬 클라이언트(kubeconfig 필요). 인스턴스/네트워크 서비스 IAM 최소권한(2.1/2.2)이 EKS 노드그룹·ALB IRSA 대조라 이 파일로 옮겨와 있음 — 2.2는 VPC CNI IRSA 미분리가 구조적으로 확정된 사실이라 항상 REVIEW 이상(PASS 없음) |
+| `checks/eks_checks.py` | 1.11~1.13, 2.1~2.3, 3.9, 4.14~4.15 | boto3 + kubernetes 파이썬 클라이언트(kubeconfig 필요). 인스턴스/네트워크/기타서비스 IAM 최소권한(2.1~2.3)이 전부 EKS 노드그룹·ALB IRSA·backend-common-sa IRSA 대조라 이 파일로 옮겨와 있음 — 2.2는 2026-09-20까지 VPC CNI IRSA 미분리가 구조적으로 확정된 사실이라 REVIEW 고정이었으나, 인프라팀이 분리를 구현 완료했다고 회신해 aws-node ServiceAccount의 IRSA annotation 실측 기반 PASS/REVIEW로 전환(ALB와 동일 패턴), 2.3은 KMS 부분이 구조적 문제(§하단 참고)로 판정 보류 중 |
 
 판정유형이 "제외"로 확정된 항목(4.13 백업)은 코드로 작성하지 않고 `cloud_check.py`가
 N/A 고정 행으로 삽입한다.
@@ -50,10 +50,11 @@ python3 cloud_check.py --round "1차" --eks-clusters my-cluster-1,my-cluster-2
 ## 아직 미착수 / 보류 (실제 계정 연동 후 확인 필요)
 
 2026-09-13 인프라팀 대량 회신으로 1.1,1.2,1.4,1.6,1.11 / 2.1,2.2 / 3.2,3.6 / 3.10(Idle
-Timeout) 는 전부 확정·자동판정 전환 완료됐다(해결된 항목은 이 표에서 제외). 아래는
-2026-09-14 기준 여전히 열려있는 항목만 남긴다.
+Timeout) 는 전부 확정·자동판정 전환 완료됐다(해결된 항목은 이 표에서 제외). 2.3(S3/
+SecretManager)도 2026-09-17 baseline 확정으로 코드화 완료됐다. 아래는 여전히 열려있는
+항목만 남긴다.
 
 | 항목 | 이유 |
 |---|---|
-| 2.3(KMS/S3/SecretManager) | `config.SERVICE_IAM_POLICY_MAP` 아직 TODO(None) — 서비스 역할별 필요권한 정의서 확정 시 값만 채우면 됨(로직은 이미 작성됨, 값 없으면 자동 SKIP) |
+| 2.3(KMS 부분만) | S3/SecretManager는 2026-09-17 코드화 완료(`eks_checks.check_2_3_service_policies`). KMS는 baseline은 확정(auth-service만 kms:Sign/GetPublicKey)이나, backend 8개 서비스가 IRSA 없는 ServiceAccount(`backend-common-sa`) 하나를 공유하는 구조라 "auth만 KMS 보유"를 만족시킬 방법이 없음 — 인프라팀에 확인요청 전달, `config.SERVICE_IAM_KMS_CHECK_ENABLED=False`로 판정 제외 중 |
 | 1.8 | AWS Config Rule(`access-keys-rotated`)이 대상 계정에 배포돼 있어야 정상 판정 |

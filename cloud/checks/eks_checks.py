@@ -7,8 +7,6 @@ K8s API 접근이 필요한 항목(1.11,1.12,1.13,2.2,3.9)은 mgmt 서버에 이
 import json
 import os
 
-import yaml
-
 import config
 from .common import make_result, safe_call
 
@@ -35,6 +33,11 @@ def _resolve_context(cluster_name):
     names = [c["name"] for c in contexts]
     if cluster_name in names:
         return cluster_name, None
+    # 2026-09-20 인프라팀 회신(트래킹표 6번) — mgmt 서버 kubeconfig에 동일 클러스터로
+    # 매칭되는 컨텍스트가 여러 개 있을 수 있어, 확정된 컨텍스트명을 우선 사용한다.
+    override = config.EKS_KUBECONFIG_CONTEXT_OVERRIDE.get(cluster_name) if getattr(config, "EKS_KUBECONFIG_CONTEXT_OVERRIDE", None) else None
+    if override and override in names:
+        return override, None
     matches = [n for n in names if n.endswith("/" + cluster_name)] or \
               [n for n in names if cluster_name in n]
     if len(matches) == 1:
@@ -70,32 +73,36 @@ def _load_rbac_v1(cluster_name):
         return None, str(exc)
 
 
-def check_1_11_eks_user_management(cluster_name):
-    # [확정 — 2026-09-13 인프라팀 노션 회신] aws-auth ConfigMap의 mapUsers/mapRoles가
-    # config.EKS_ACCESS_WHITELIST(ARN 목록)와 정확히 일치해야 함 — 그 외 매핑 발견 시 FAIL.
+def check_1_11_eks_user_management(eks, cluster_name):
+    # [2026-09-18 갱신] 인프라팀 확인 — 이 프로젝트는 aws-auth ConfigMap이 아니라 EKS
+    # Access Entry로 클러스터 접근을 관리함(개인 IAM→MFA 조건부 AssumeRole→목적별 IAM
+    # Role→EKS Access Entry→K8s Group→RBAC 구조 적용 중, 트래킹표 2/2-1/2-2번 참고).
+    # boto3 list_access_entries/describe_access_entry로 재작성 — config.EKS_ACCESS_WHITELIST
+    # (ARN 목록)와 정확히 일치해야 함, 그 외 매핑 발견 시 FAIL.
+    # 노드용으로 자동 생성되는 EC2_LINUX/FARGATE_LINUX 등은 사람이 관리하는 접근이 아니라
+    # 제외하고, STANDARD 타입(개인 IAM User 또는 AssumeRole 대상 IAM Role)만 대조한다.
+    # ⚠ 인프라팀이 DB Secret 접근용·workload publication용 목적별 IAM Role을 새로 만들면
+    # (트래킹표 2-2번) 그 Role ARN도 EKS_ACCESS_WHITELIST에 추가해야 FAIL로 안 잡힌다.
     if config.EKS_ACCESS_WHITELIST is None:
         return [make_result("1.11", "EKS 사용자 관리", "SKIP",
                              "인가된 EKS 접근 사용자 화이트리스트(config.EKS_ACCESS_WHITELIST) 미확정")]
-    core_v1, err = _load_core_v1(cluster_name)
+    entries, err = safe_call(eks.list_access_entries, clusterName=cluster_name)
     if err:
-        return [make_result("1.11", "EKS 사용자 관리", "SKIP",
-                             f"[{cluster_name}] kubeconfig 컨텍스트 로드 실패: {err}")]
-    cm, kerr = safe_call(core_v1.read_namespaced_config_map, name="aws-auth", namespace="kube-system")
-    if kerr:
-        return [make_result("1.11", "EKS 사용자 관리", "SKIP", f"[{cluster_name}] aws-auth ConfigMap 조회 실패: {kerr}")]
-    data = cm.data or {}
-    mapped_arns = []
-    for key in ("mapUsers", "mapRoles"):
-        try:
-            entries = yaml.safe_load(data.get(key, "[]")) or []
-        except yaml.YAMLError:
-            entries = []
-        mapped_arns.extend(e.get("userarn") or e.get("rolearn") for e in entries if isinstance(e, dict))
-    mapped_arns = [a for a in mapped_arns if a]
-    unauthorized = [a for a in mapped_arns if a not in config.EKS_ACCESS_WHITELIST]
+        return [make_result("1.11", "EKS 사용자 관리", "SKIP", f"[{cluster_name}] Access Entry 목록 조회 실패: {err}")]
+    unauthorized = []
+    for principal_arn in entries.get("accessEntries", []):
+        detail, derr = safe_call(eks.describe_access_entry, clusterName=cluster_name, principalArn=principal_arn)
+        if derr:
+            unauthorized.append(f"{principal_arn}(조회 실패: {derr})")
+            continue
+        entry_type = detail.get("accessEntry", {}).get("type", "STANDARD")
+        if entry_type != "STANDARD":
+            continue  # 노드용 자동 생성 Access Entry(EC2_LINUX 등) 제외
+        if principal_arn not in config.EKS_ACCESS_WHITELIST:
+            unauthorized.append(principal_arn)
     status = "PASS" if not unauthorized else "FAIL"
-    detail = f"[{cluster_name}] 화이트리스트 외 aws-auth 매핑: " + (", ".join(unauthorized) if unauthorized else "없음")
-    return [make_result("1.11", "EKS 사용자 관리", status, detail)]
+    detail_msg = f"[{cluster_name}] 화이트리스트 외 Access Entry: " + (", ".join(unauthorized) if unauthorized else "없음")
+    return [make_result("1.11", "EKS 사용자 관리", status, detail_msg)]
 
 
 def check_1_12_automount_token(cluster_name):
@@ -316,9 +323,9 @@ def check_2_2_network_service_policies(iam, cluster_names):
     # [확정 — 2026-09-13 인프라팀 직접 질의 회신]
     # ALB(aws-load-balancer-controller IRSA): 실제 권한이 공식 정책(reference/
     # alb_iam_policy.json, 2026-09-13 고정)의 부분집합인지 대조(초과 권한만 FAIL).
-    # VPC CNI: 전용 IRSA 미분리 상태는 인프라팀이 이미 인지·확정한 정적 사실이라(차기
-    # 스프린트에 IRSA 분리 예정) EKS 클러스터를 조회할 수 있는지와 무관하게 이 항목은
-    # 최소 REVIEW — ALB 쪽만 라이브 대조가 되면 그 결과로 FAIL까지 격상될 수 있다.
+    # VPC CNI(aws-node IRSA): 2026-09-20 인프라팀이 IRSA 분리를 구현 완료했다고 회신해
+    # 더 이상 정적 REVIEW로 고정하지 않고, kube-system/aws-node ServiceAccount의 IRSA
+    # annotation 실측 여부로 판정한다(config.VPC_CNI_IRSA_SERVICE_ACCOUNT 참고).
     try:
         official_actions = _load_alb_official_actions()
     except OSError as exc:
@@ -358,11 +365,100 @@ def check_2_2_network_service_policies(iam, cluster_names):
             "aws-load-balancer-controller ServiceAccount를 찾지 못함(K8s 접근 실패 또는 미배포) — ALB IRSA 대조는 보류"
         )
 
-    # VPC CNI 이슈는 클러스터 조회 가능 여부와 무관한 확정 사실이라 항상 최소 REVIEW —
-    # ALB가 실제로 FAIL로 확인된 경우에만 더 심각한 FAIL로 격상한다.
-    status = "FAIL" if alb_status == "FAIL" else "REVIEW"
-    detail = f"{alb_detail} | {config.VPC_CNI_IRSA_NOT_SEPARATED_NOTE}"
+    # VPC CNI(aws-node) IRSA annotation 실측
+    cni_status, cni_detail = None, None
+    for cluster_name in cluster_names:
+        core_v1, err = _load_core_v1(cluster_name)
+        if err:
+            continue
+        sa, serr = safe_call(
+            core_v1.read_namespaced_service_account,
+            name=config.VPC_CNI_IRSA_SERVICE_ACCOUNT["name"],
+            namespace=config.VPC_CNI_IRSA_SERVICE_ACCOUNT["namespace"],
+        )
+        if serr:
+            cni_detail = f"[{cluster_name}] aws-node ServiceAccount 조회 실패: {serr}"
+            continue
+        role_arn = (sa.metadata.annotations or {}).get("eks.amazonaws.com/role-arn")
+        if role_arn:
+            cni_status = "PASS"
+            cni_detail = f"[{cluster_name}] VPC CNI 전용 IRSA 확인됨(role={role_arn})"
+        else:
+            cni_status = "REVIEW"
+            cni_detail = f"[{cluster_name}] aws-node ServiceAccount에 IRSA role-arn annotation 없음"
+        break  # aws-node는 클러스터당 1개 DaemonSet — 첫 매칭 대표 판정
+
+    if cni_status is None:
+        cni_status = "REVIEW"
+        cni_detail = cni_detail or config.VPC_CNI_IRSA_NOT_SEPARATED_NOTE
+
+    # 최종 판정: 둘 중 하나라도 FAIL이면 FAIL, 둘 다 PASS면 PASS, 그 외엔 REVIEW.
+    if alb_status == "FAIL" or cni_status == "FAIL":
+        status = "FAIL"
+    elif alb_status == "PASS" and cni_status == "PASS":
+        status = "PASS"
+    else:
+        status = "REVIEW"
+    detail = f"ALB: {alb_detail} | VPC CNI: {cni_detail}"
     return [make_result("2.2", "네트워크 서비스 정책 관리", status, detail)]
+
+
+def check_2_3_service_policies(iam, cluster_names):
+    # [2026-09-17] S3/SecretManager baseline 확정(config.SERVICE_IAM_POLICY_MAP 참고) —
+    # 8개 백엔드 서비스가 공유하는 ServiceAccount(backend-common-sa)의 IRSA role-arn을
+    # 찾아 실제 권한에 s3:*/secretsmanager:* 액션이 있으면 FAIL(과잉 권한, baseline은
+    # 전원 미보유가 정상). KMS는 config.SERVICE_IAM_KMS_CHECK_ENABLED가 True가 되기
+    # 전까지 판정에서 제외한다 — backend-common-sa에 IRSA 자체가 없는 상태이고, 있더라도
+    # 8개 서비스가 SA를 공유하는 구조라 "auth만 KMS 보유" 요건을 만족시킬 수 없는
+    # 구조적 문제가 있어 인프라팀에 별도 확인요청 전달함(인프라점검_확인요청_트래킹.md 참고).
+    if config.SERVICE_IAM_POLICY_MAP is None:
+        return [make_result("2.3", "기타 서비스 정책 관리", "SKIP",
+                             "서비스별 IAM 정책 매핑(config.SERVICE_IAM_POLICY_MAP) 미확정")]
+
+    sa_conf = config.SERVICE_IAM_POLICY_MAP["backend_service_account"]
+    role_arn, lookup_detail = None, None
+    for cluster_name in cluster_names:
+        core_v1, err = _load_core_v1(cluster_name)
+        if err:
+            lookup_detail = f"[{cluster_name}] {err}"
+            continue
+        sa, serr = safe_call(
+            core_v1.read_namespaced_service_account,
+            name=sa_conf["name"],
+            namespace=sa_conf["namespace"],
+        )
+        if serr:
+            lookup_detail = f"[{cluster_name}] {sa_conf['name']} ServiceAccount 조회 실패: {serr}"
+            continue
+        role_arn = (sa.metadata.annotations or {}).get("eks.amazonaws.com/role-arn")
+        lookup_detail = None
+        break
+
+    if lookup_detail:
+        return [make_result("2.3", "기타 서비스 정책 관리", "SKIP",
+                             f"backend-common-sa 조회 실패로 판정 불가: {lookup_detail}")]
+
+    if role_arn is None:
+        detail = (
+            f"{sa_conf['name']}(백엔드 8개 서비스 공유)에 IRSA(eks.amazonaws.com/role-arn) "
+            "바인딩 없음 — S3/SecretManager 권한 미보유는 baseline 충족(PASS). KMS는 auth-service만 "
+            "보유해야 하나 IRSA 자체가 없어 실제 구현 여부 확인 불가, 별도 확인요청 전달됨"
+        )
+        return [make_result("2.3", "기타 서비스 정책 관리", "PASS", detail)]
+
+    role_name = role_arn.rsplit("/", 1)[-1]
+    actual_actions, aerr = _role_granted_actions(iam, role_name)
+    if aerr:
+        return [make_result("2.3", "기타 서비스 정책 관리", "SKIP", f"role={role_name} 정책 조회 실패: {aerr}")]
+
+    forbidden = {a for a in actual_actions if a.split(":", 1)[0] in ("s3", "secretsmanager")}
+    status = "FAIL" if forbidden else "PASS"
+    detail = (
+        f"{sa_conf['name']} IRSA role={role_name} — S3/SecretManager 과잉 권한: "
+        f"{_fmt_set(forbidden) if forbidden else '없음'} (8개 서비스 공유 SA라 baseline은 전원 미보유). "
+        "KMS는 구조적 문제로 판정 제외(SERVICE_IAM_KMS_CHECK_ENABLED=False, 확인요청 전달됨)"
+    )
+    return [make_result("2.3", "기타 서비스 정책 관리", status, detail)]
 
 
 def run_all(eks, iam, ec2, cluster_names, discovery_error=None):
@@ -383,16 +479,18 @@ def run_all(eks, iam, ec2, cluster_names, discovery_error=None):
             make_result("3.9", "EKS Pod 보안 정책 관리", "SKIP", note),
             make_result("4.14", "EKS Cluster 제어 플레인 로깅 설정", "SKIP", note),
             make_result("4.15", "EKS Cluster 암호화 설정", "SKIP", note),
+            make_result("2.3", "기타 서비스 정책 관리", "SKIP", note),
         ]
     else:
         results = []
         for cluster_name in cluster_names:
-            results += check_1_11_eks_user_management(cluster_name)
+            results += check_1_11_eks_user_management(eks, cluster_name)
             results += check_1_12_automount_token(cluster_name)
             results += check_1_13_anonymous_access(cluster_name)
             results += check_3_9_pod_security(cluster_name)
             results += check_4_14_control_plane_logging(eks, cluster_name)
             results += check_4_15_secrets_encryption(eks, cluster_name)
+        results += check_2_3_service_policies(iam, cluster_names)
     # 2.2(VPC CNI REVIEW)는 클러스터 조회 가능 여부와 무관한 정적 확정 사실이 걸려 있어
     # cluster_names가 비어도 항상 호출한다(check_2_2_network_service_policies 내부에서
     # ALB 파트만 조건부로 SKIP 취급하고 최종 상태는 최소 REVIEW로 고정).

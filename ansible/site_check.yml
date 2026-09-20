@@ -57,3 +57,21 @@
       ansible.builtin.copy:
         content: "{{ { 'checked_at': ansible_date_time.iso8601, 'round': check_round, 'results': check_results } | to_nice_json }}"
         dest: "./results/dbms_{{ ansible_date_time.date }}.json"
+
+- name: "인증/인가 점검 (AUTHZ-XX, SVC-01) — K8s 기반"
+  hosts: localhost   # 백엔드 서비스 Ingress/NetworkPolicy는 mgmt 서버에서 K8s API로 조회
+  gather_facts: true
+  vars:
+    check_results: []
+    check_round: "정기점검"
+  roles:
+    - auth_authz
+  tasks:
+    - name: "결과 요약 출력"
+      ansible.builtin.debug:
+        msg: "인증_인가 — PASS {{ check_results | selectattr('status','equalto','PASS') | list | length }} / FAIL {{ check_results | selectattr('status','equalto','FAIL') | list | length }} / N/A·SKIP·REVIEW {{ check_results | rejectattr('status','in',['PASS','FAIL']) | list | length }} / 총 {{ check_results | length }}"
+
+    - name: "결과 파일 저장"
+      ansible.builtin.copy:
+        content: "{{ { 'checked_at': ansible_date_time.iso8601, 'round': check_round, 'results': check_results } | to_nice_json }}"
+        dest: "./results/auth_authz_{{ ansible_date_time.date }}.json"
