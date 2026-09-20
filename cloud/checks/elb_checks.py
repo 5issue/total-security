@@ -83,12 +83,14 @@ def _check_alb(elbv2, ec2, lb):
     else:
         idle_note += " (기준값 미확정 — 판정 제외)"
 
-    # ⑥ 헬스체크 경로 '/', 200-399, 기본값(간격15초/타임아웃5초/정상2/비정상2)
+    # ⑥ 헬스체크 경로 '/'(또는 config.ELB_HEALTHCHECK_PATH_EXCEPTIONS 예외), 200-399,
+    #   기본값(간격15초/타임아웃5초/정상2/비정상2)
     tgs_res, terr = safe_call(elbv2.describe_target_groups, LoadBalancerArn=arn)
+    healthcheck_allowed_paths = {"/"} | set(config.ELB_HEALTHCHECK_PATH_EXCEPTIONS or [])
     for tg in (tgs_res["TargetGroups"] if not terr else []):
         tg_name = tg["TargetGroupName"]
-        if tg.get("HealthCheckPath") != "/":
-            violations.append(f"헬스체크({tg_name}) 경로={tg.get('HealthCheckPath')}(기준 '/')")
+        if tg.get("HealthCheckPath") not in healthcheck_allowed_paths:
+            violations.append(f"헬스체크({tg_name}) 경로={tg.get('HealthCheckPath')}(기준 '/' 또는 예외목록 {sorted(healthcheck_allowed_paths)})")
         matcher_code = tg.get("Matcher", {}).get("HttpCode", "")
         if not _http_code_covers_2xx_3xx(matcher_code):
             violations.append(f"헬스체크({tg_name}) HttpCode={matcher_code}(기준 200-399)")

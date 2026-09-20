@@ -7,7 +7,6 @@
 # =============================================================================
 
 u08_root_group_admin_whitelist: ["ec2-user"]
-u28_allowed_ips: ["10.0.0.0/16"]
 u40_nfs_allowed_hosts: ["10.0.0.0/16"]
 u45_mail_latest_version: "3.14"
 u47_relay_allowed_list: ["10.0.0.0/16"]
