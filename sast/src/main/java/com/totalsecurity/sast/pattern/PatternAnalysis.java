@@ -2,6 +2,7 @@ package com.totalsecurity.sast.pattern;
 
 import com.totalsecurity.sast.finding.PatternFinding;
 import com.totalsecurity.sast.ir.JavaFileInfo;
+import com.totalsecurity.sast.pattern.authn.Authn06HardcodedSigningMaterialDetector;
 import com.totalsecurity.sast.pattern.credential.HardcodedCredentialDetector;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,7 +17,9 @@ public final class PatternAnalysis {
     }
 
     public static PatternAnalysis javaDefaults() {
-        return new PatternAnalysis(List.of(new HardcodedCredentialDetector()));
+        return new PatternAnalysis(List.of(
+                new HardcodedCredentialDetector(),
+                new Authn06HardcodedSigningMaterialDetector()));
     }
 
     public List<PatternFinding> analyze(JavaFileInfo file) {

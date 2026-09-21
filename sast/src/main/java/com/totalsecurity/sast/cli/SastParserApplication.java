@@ -64,7 +64,7 @@ public final class SastParserApplication {
         for (var finding : result.findings()) {
             out.println();
             out.println("[" + finding.severity() + "] " + finding.ruleId()
-                    + " " + finding.cwe());
+                    + finding.cweReference().map(cwe -> " " + cwe).orElse(""));
             out.println(result.relativePath(finding.primaryLocation().file())
                     + ":" + finding.primaryLocation().startLine());
         }

@@ -15,7 +15,7 @@ Java source
 
 Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java 의미 추출기는 syntax tree에서 class, method, parameter, variable, assignment, method invocation, return, annotation 및 statement 구조를 추출해 자체 IR로 변환한다. CFG, DataFlow, Taint, rule 및 Finding 계층은 `TSNode`, `TSTree`, `org.treesitter` 타입이나 Tree-sitter node type 문자열에 직접 의존하지 않는다.
 
-현재 구현은 STEP 1~24와 STEP 26A/26B/26C, STEP 27/27B 및 STEP 28의 범위다.
+현재 구현은 STEP 1~24와 STEP 26A/26B/26C, STEP 27/27B, STEP 28 및 STEP 29A의 범위다.
 
 - STEP 1: Tree-sitter Java parsing 및 syntax tree 순회
 - STEP 2/2B: Java 의미 추출, Expression IR, lexical/structural 순서를 보존하는 ordered Statement IR
@@ -36,6 +36,7 @@ Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java �
 - STEP 26C: Lombok config import가 존재할 때 default naming을 추측하지 않는 fail-closed 보강
 - STEP 27/27B: exact project-local direct member record/enum extraction, source canonical indexing 및 enclosing member shadowing precedence 보강
 - STEP 28: 독립된 controlled fixture와 manifest를 이용한 ground-truth vulnerability benchmark
+- STEP 29A: AUTHN-06 source hardcoded signing private key/secret 보수적 검사
 
 이 엔진은 finding이 0개라는 사실을 대상이 안전하다는 증명으로 해석하지 않는다. parse/semantic failure와 지원하지 않는 호출 또는 구문은 별도로 보존하며, 지원 범위 밖의 의미를 추측해 성공한 분석으로 표시하지 않는다.
 
@@ -386,6 +387,16 @@ Pattern Analysis는 DataFlow/Taint vulnerability detector와 분리되어 있다
 - placeholder, 명백한 test/example value 및 지원하지 않는 동적 표현은 보수적으로 처리한다.
 - regex나 literal pattern 결과를 source-to-sink taint finding으로 가장하지 않는다.
 - Pattern Finding에는 DataFlow source/sink flow가 없을 수 있다.
+
+## AUTHN-06 hardcoded signing material
+
+`AUTHN_06_HARDCODED_SIGNING_MATERIAL`은 Pattern Analysis에서 source에 직접 하드코딩된 인증/토큰 서명용 private-key PEM 또는 signing secret 문자열을 보수적으로 검사한다. 완전한 private-key PEM marker pair, 또는 signing/auth/JWT 문맥과 secret/key identifier가 함께 증명되는 직접 literal만 대상으로 하며 값은 evidence에서 redaction한다.
+
+- `PUBLIC KEY`, certificate 및 명확한 example/placeholder는 private signing material로 판정하지 않는다.
+- `System.getenv`, external configuration/property lookup, KMS/secret provider 반환값과 `@Value` property reference는 source hardcoded literal로 판정하지 않는다.
+- KMS 또는 외부 provider 호출이 존재한다는 사실만으로 실제 운영 secret 보관 상태가 안전하다고 증명하지 않는다.
+- 제공된 체크리스트에 CWE가 명시되지 않아 임의 CWE를 부여하지 않으며, checklist identity는 `AUTHN-06`과 별도 Rule ID로 보존한다.
+- 이 rule은 기존 `HARDCODED_CREDENTIAL`/CWE-798 의미를 변경하지 않는다. 하나의 literal이 두 규칙의 독립적인 조건을 모두 만족하면 별도 finding이 생성될 수 있다.
 
 ## 명시적 제한
 

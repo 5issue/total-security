@@ -14,6 +14,7 @@ import com.totalsecurity.sast.java.extractor.JavaSemanticExtractor;
 import com.totalsecurity.sast.parser.JavaSourceParser;
 import com.totalsecurity.sast.parser.ParsedJavaFile;
 import com.totalsecurity.sast.pattern.PatternAnalysis;
+import com.totalsecurity.sast.pattern.authn.Authn06HardcodedSigningMaterialDetector;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
 import java.util.List;
@@ -161,10 +162,12 @@ class HardcodedCredentialDetectorTest {
     }
 
     @Test
-    void defaultPatternAnalysisRegistersOnlyHardcodedCredentialDetector() {
+    void defaultPatternAnalysisKeepsCredentialAndAuthn06AsSeparateDetectors() {
         PatternAnalysis analysis = PatternAnalysis.javaDefaults();
-        assertEquals(1, analysis.detectors().size());
+        assertEquals(2, analysis.detectors().size());
         assertTrue(analysis.detectors().getFirst() instanceof HardcodedCredentialDetector);
+        assertTrue(analysis.detectors().get(1)
+                instanceof Authn06HardcodedSigningMaterialDetector);
         assertNotNull(file);
     }
 
