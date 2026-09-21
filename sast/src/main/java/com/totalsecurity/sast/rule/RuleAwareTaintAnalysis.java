@@ -6,6 +6,8 @@ import com.totalsecurity.sast.ir.JavaFileInfo;
 import com.totalsecurity.sast.ir.MethodInfo;
 import com.totalsecurity.sast.rule.sink.SinkMatch;
 import com.totalsecurity.sast.rule.source.SourceMatch;
+import com.totalsecurity.sast.rule.context.LombokGetterNamingContext;
+import com.totalsecurity.sast.rule.context.ProjectTypeLookup;
 import com.totalsecurity.sast.taint.IntraproceduralTaintAnalysis;
 import com.totalsecurity.sast.taint.TaintAnalysisResult;
 import com.totalsecurity.sast.taint.TaintSeed;
@@ -30,7 +32,21 @@ public final class RuleAwareTaintAnalysis {
             MethodInfo method,
             DataFlowResult dataFlow,
             RuleRegistry rules) {
+        return analyze(file, type, method, dataFlow, rules,
+                ProjectTypeLookup.none(), LombokGetterNamingContext.unknown());
+    }
+
+    public RuleAwareTaintResult analyze(
+            JavaFileInfo file,
+            ClassInfo type,
+            MethodInfo method,
+            DataFlowResult dataFlow,
+            RuleRegistry rules,
+            ProjectTypeLookup projectTypes,
+            LombokGetterNamingContext lombokNaming) {
         Objects.requireNonNull(rules, "rules");
+        Objects.requireNonNull(projectTypes, "projectTypes");
+        Objects.requireNonNull(lombokNaming, "lombokNaming");
         List<SourceMatch> sourceMatches = rules.matchSources(file, type, method, dataFlow);
         List<TaintSeed> seeds = sourceMatches.stream()
                 .map(match -> match.toTaintSeed(dataFlow))
@@ -38,7 +54,8 @@ public final class RuleAwareTaintAnalysis {
         TaintAnalysisResult taintResult = taintAnalysis.analyze(
                 dataFlow,
                 seeds,
-                rules.methodSemantics(file, type, method, dataFlow));
+                rules.methodSemantics(
+                        file, type, method, dataFlow, projectTypes, lombokNaming));
         List<SinkMatch> sinkMatches = rules.matchSinks(file, type, method, dataFlow);
         return new RuleAwareTaintResult(sourceMatches, seeds, taintResult, sinkMatches);
     }

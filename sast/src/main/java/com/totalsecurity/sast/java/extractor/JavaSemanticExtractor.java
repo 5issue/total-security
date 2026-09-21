@@ -471,7 +471,13 @@ public final class JavaSemanticExtractor {
             String name = field(child, "name").map(this::text).orElse("<unnamed>");
             Optional<Expression> initializer = field(child, "value").map(this::extractExpression);
             variables.add(new VariableInfo(
-                    kind, name, type, annotations, initializer, location(child)));
+                    kind,
+                    name,
+                    type,
+                    annotations,
+                    initializer,
+                    kind == VariableKind.FIELD && hasModifier(declaration, "static"),
+                    location(child)));
         }
         return List.copyOf(variables);
     }

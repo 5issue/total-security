@@ -11,6 +11,7 @@ public record VariableInfo(
         String type,
         List<AnnotationInfo> annotations,
         Optional<Expression> initializer,
+        boolean staticMember,
         SourceLocation location) {
     public VariableInfo {
         Objects.requireNonNull(kind, "kind");
@@ -20,5 +21,15 @@ public record VariableInfo(
         initializer = Objects.requireNonNull(initializer, "initializer");
         Objects.requireNonNull(location, "location");
     }
-}
 
+    /** Compatibility constructor for variables whose declaration modifiers are not supplied. */
+    public VariableInfo(
+            VariableKind kind,
+            String name,
+            String type,
+            List<AnnotationInfo> annotations,
+            Optional<Expression> initializer,
+            SourceLocation location) {
+        this(kind, name, type, annotations, initializer, false, location);
+    }
+}

@@ -7,7 +7,9 @@ import com.totalsecurity.sast.ir.MethodInfo;
 import com.totalsecurity.sast.rule.context.CallSiteContext;
 import com.totalsecurity.sast.rule.context.CallSiteContextResolver;
 import com.totalsecurity.sast.rule.context.LightweightTypeContext;
+import com.totalsecurity.sast.rule.context.LombokGetterNamingContext;
 import com.totalsecurity.sast.rule.context.ParameterContext;
+import com.totalsecurity.sast.rule.context.ProjectTypeLookup;
 import com.totalsecurity.sast.rule.sanitizer.SanitizerRule;
 import com.totalsecurity.sast.rule.sink.JdbcConnectionSqlSinkRule;
 import com.totalsecurity.sast.rule.sink.JdbcStatementSqlSinkRule;
@@ -34,6 +36,7 @@ import com.totalsecurity.sast.taint.model.JavaUriMethodTaintModel;
 import com.totalsecurity.sast.taint.model.MethodTaintModel;
 import com.totalsecurity.sast.taint.model.MethodTaintModelRegistry;
 import com.totalsecurity.sast.taint.model.MethodTaintSemanticsProvider;
+import com.totalsecurity.sast.taint.model.LombokGetterMethodTaintModel;
 import com.totalsecurity.sast.taint.model.RecordAccessorMethodTaintModel;
 import java.util.ArrayList;
 import java.util.List;
@@ -82,6 +85,7 @@ public final class RuleRegistry {
                 List.of(),
                 List.of(
                         new RecordAccessorMethodTaintModel(),
+                        new LombokGetterMethodTaintModel(),
                         new JavaStringMethodTaintModel(),
                         new JavaNioPathMethodTaintModel(),
                         new JavaUriMethodTaintModel()));
@@ -143,7 +147,19 @@ public final class RuleRegistry {
 
     public MethodTaintSemanticsProvider methodSemantics(
             JavaFileInfo file, ClassInfo type, MethodInfo method, DataFlowResult dataFlow) {
-        AnalysisInputs inputs = inputs(file, type, method, dataFlow);
+        return methodSemantics(file, type, method, dataFlow,
+                ProjectTypeLookup.none(), LombokGetterNamingContext.unknown());
+    }
+
+    public MethodTaintSemanticsProvider methodSemantics(
+            JavaFileInfo file,
+            ClassInfo type,
+            MethodInfo method,
+            DataFlowResult dataFlow,
+            ProjectTypeLookup projectTypes,
+            LombokGetterNamingContext lombokNaming) {
+        AnalysisInputs inputs = inputs(
+                file, type, method, dataFlow, projectTypes, lombokNaming);
         List<MethodTaintModel> models = new ArrayList<>(sanitizerRules);
         models.addAll(methodModels);
         return new MethodTaintModelRegistry(inputs.calls(), models);
@@ -157,6 +173,24 @@ public final class RuleRegistry {
         Objects.requireNonNull(dataFlow, "dataFlow");
         LightweightTypeContext types = new LightweightTypeContext(file);
         return new AnalysisInputs(types, new CallSiteContextResolver(file, type, method, dataFlow));
+    }
+
+    private static AnalysisInputs inputs(
+            JavaFileInfo file,
+            ClassInfo type,
+            MethodInfo method,
+            DataFlowResult dataFlow,
+            ProjectTypeLookup projectTypes,
+            LombokGetterNamingContext lombokNaming) {
+        Objects.requireNonNull(file, "file");
+        Objects.requireNonNull(type, "type");
+        Objects.requireNonNull(method, "method");
+        Objects.requireNonNull(dataFlow, "dataFlow");
+        Objects.requireNonNull(projectTypes, "projectTypes");
+        Objects.requireNonNull(lombokNaming, "lombokNaming");
+        LightweightTypeContext types = new LightweightTypeContext(file, projectTypes::contains);
+        return new AnalysisInputs(types, new CallSiteContextResolver(
+                file, type, method, dataFlow, projectTypes, lombokNaming));
     }
 
     private static void validateIds(List<String> ids, String kind) {

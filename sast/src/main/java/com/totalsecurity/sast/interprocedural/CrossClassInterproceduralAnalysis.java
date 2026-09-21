@@ -28,6 +28,7 @@ import com.totalsecurity.sast.ir.statement.ReturnStatement;
 import com.totalsecurity.sast.rule.RuleAwareTaintResult;
 import com.totalsecurity.sast.rule.RuleRegistry;
 import com.totalsecurity.sast.rule.context.CallSiteContextResolver;
+import com.totalsecurity.sast.rule.context.LombokGetterNamingContext;
 import com.totalsecurity.sast.rule.sink.SinkMatch;
 import com.totalsecurity.sast.rule.source.SourceMatch;
 import com.totalsecurity.sast.taint.DefinitionTaintSeed;
@@ -66,11 +67,19 @@ public final class CrossClassInterproceduralAnalysis {
 
     public CrossClassInterproceduralResult analyze(
             Collection<JavaFileInfo> files, RuleRegistry rules) {
+        return analyze(files, rules, LombokGetterNamingContext.unknown());
+    }
+
+    public CrossClassInterproceduralResult analyze(
+            Collection<JavaFileInfo> files,
+            RuleRegistry rules,
+            LombokGetterNamingContext lombokNaming) {
         Objects.requireNonNull(files, "files");
         Objects.requireNonNull(rules, "rules");
+        Objects.requireNonNull(lombokNaming, "lombokNaming");
         ProjectClassIndex index = new ProjectClassIndex(files);
         LinkedHashSet<UnsupportedInterproceduralFlow> unsupported = duplicateClassProblems(index);
-        LinkedHashMap<ProjectMethodId, MethodArtifacts> artifacts = prepare(index);
+        LinkedHashMap<ProjectMethodId, MethodArtifacts> artifacts = prepare(index, lombokNaming);
         CrossClassCallResolver resolver = new CrossClassCallResolver(index);
         List<ProjectCallResolution> initial = resolveCalls(artifacts, resolver);
         RecursionResult recursion = excludeRecursion(initial);
@@ -136,7 +145,8 @@ public final class CrossClassInterproceduralAnalysis {
         return result;
     }
 
-    private static LinkedHashMap<ProjectMethodId, MethodArtifacts> prepare(ProjectClassIndex index) {
+    private static LinkedHashMap<ProjectMethodId, MethodArtifacts> prepare(
+            ProjectClassIndex index, LombokGetterNamingContext lombokNaming) {
         LinkedHashMap<ProjectMethodId, MethodArtifacts> result = new LinkedHashMap<>();
         for (ProjectClassEntry owner : index.uniqueClasses()) {
             for (MethodInfo method : owner.type().methods()) {
@@ -149,7 +159,7 @@ public final class CrossClassInterproceduralAnalysis {
                 result.put(id, new MethodArtifacts(
                         owner, dataFlow,
                         new CallSiteContextResolver(
-                                owner.file(), owner.type(), method, dataFlow, index)));
+                                owner.file(), owner.type(), method, dataFlow, index, lombokNaming)));
             }
         }
         return result;

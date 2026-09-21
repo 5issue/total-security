@@ -25,6 +25,7 @@ import com.totalsecurity.sast.pattern.PatternAnalysis;
 import com.totalsecurity.sast.rule.RuleAwareTaintAnalysis;
 import com.totalsecurity.sast.rule.RuleAwareTaintResult;
 import com.totalsecurity.sast.rule.RuleRegistry;
+import com.totalsecurity.sast.rule.context.LombokGetterNamingContext;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -89,6 +90,8 @@ public final class ProjectScanner {
                 extractedPaths,
                 extractedFiles,
                 diagnostics);
+        LombokGetterNamingContext lombokNaming =
+                new LombokConfigurationDiscovery().inspect(discovered.javaFiles());
 
         List<FindingResult> findings = new ArrayList<>();
         for (JavaFileInfo file : extractedFiles) {
@@ -108,11 +111,12 @@ public final class ProjectScanner {
         if (!extractedFiles.isEmpty()) {
             try {
                 CrossClassInterproceduralResult cross =
-                        new CrossClassInterproceduralAnalysis().analyze(extractedFiles, rules);
+                        new CrossClassInterproceduralAnalysis()
+                                .analyze(extractedFiles, rules, lombokNaming);
                 findings.addAll(cross.findings());
                 unsupported.addAll(cross.unsupported());
                 addContextSensitiveFindings(
-                        projectRoot, extractedFiles, cross, findings, diagnostics);
+                        projectRoot, extractedFiles, cross, lombokNaming, findings, diagnostics);
             } catch (RuntimeException exception) {
                 diagnostics.add(diagnostic(
                         projectRoot,
@@ -210,6 +214,7 @@ public final class ProjectScanner {
             Path projectRoot,
             List<JavaFileInfo> extractedFiles,
             CrossClassInterproceduralResult cross,
+            LombokGetterNamingContext lombokNaming,
             List<FindingResult> findings,
             List<ProjectScanDiagnostic> diagnostics) {
         RuleAwareTaintAnalysis intraprocedural = new RuleAwareTaintAnalysis();
@@ -246,7 +251,9 @@ public final class ProjectScanner {
 
                     RuleAwareTaintResult local;
                     try {
-                        local = intraprocedural.analyze(file, type, method, dataFlow, rules);
+                        local = intraprocedural.analyze(
+                                file, type, method, dataFlow, rules,
+                                cross.classIndex(), lombokNaming);
                     } catch (RuntimeException exception) {
                         diagnostics.add(diagnostic(
                                 projectRoot,

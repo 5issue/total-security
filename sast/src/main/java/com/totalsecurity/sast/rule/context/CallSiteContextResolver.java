@@ -47,13 +47,15 @@ public final class CallSiteContextResolver {
     private final DataFlowResult dataFlow;
     private final LightweightTypeContext types;
     private final ProjectTypeLookup projectTypes;
+    private final LombokGetterNamingContext lombokNaming;
 
     public CallSiteContextResolver(
             JavaFileInfo file,
             ClassInfo enclosingClass,
             MethodInfo enclosingMethod,
             DataFlowResult dataFlow) {
-        this(file, enclosingClass, enclosingMethod, dataFlow, ProjectTypeLookup.none());
+        this(file, enclosingClass, enclosingMethod, dataFlow, ProjectTypeLookup.none(),
+                LombokGetterNamingContext.unknown());
     }
 
     public CallSiteContextResolver(
@@ -63,7 +65,8 @@ public final class CallSiteContextResolver {
             DataFlowResult dataFlow,
             Predicate<String> projectTypeExists) {
         this(file, enclosingClass, enclosingMethod, dataFlow,
-                ProjectTypeLookup.existenceOnly(projectTypeExists));
+                ProjectTypeLookup.existenceOnly(projectTypeExists),
+                LombokGetterNamingContext.unknown());
     }
 
     public CallSiteContextResolver(
@@ -72,6 +75,17 @@ public final class CallSiteContextResolver {
             MethodInfo enclosingMethod,
             DataFlowResult dataFlow,
             ProjectTypeLookup projectTypes) {
+        this(file, enclosingClass, enclosingMethod, dataFlow, projectTypes,
+                LombokGetterNamingContext.unknown());
+    }
+
+    public CallSiteContextResolver(
+            JavaFileInfo file,
+            ClassInfo enclosingClass,
+            MethodInfo enclosingMethod,
+            DataFlowResult dataFlow,
+            ProjectTypeLookup projectTypes,
+            LombokGetterNamingContext lombokNaming) {
         this.file = Objects.requireNonNull(file, "file");
         this.enclosingClass = Objects.requireNonNull(enclosingClass, "enclosingClass");
         this.enclosingMethod = Objects.requireNonNull(enclosingMethod, "enclosingMethod");
@@ -80,6 +94,7 @@ public final class CallSiteContextResolver {
             throw new IllegalArgumentException("DataFlowResult belongs to a different method");
         }
         this.projectTypes = Objects.requireNonNull(projectTypes, "projectTypes");
+        this.lombokNaming = Objects.requireNonNull(lombokNaming, "lombokNaming");
         this.types = new LightweightTypeContext(file, projectTypes::contains);
     }
 
@@ -92,6 +107,7 @@ public final class CallSiteContextResolver {
         Optional<String> declaredType = call.call().receiver().flatMap(this::declaredReceiverTypeOf);
         Optional<String> qualifiedType = declaredType.flatMap(types::qualifyType);
         Optional<RecordAccessorInfo> recordAccessor = exactRecordAccessor(call);
+        Optional<LombokGetterInfo> lombokGetter = exactLombokGetter(call);
         Optional<EnumConstantReferenceInfo> enumConstantReceiver =
                 call.call().receiver().flatMap(this::exactEnumConstant);
         return new CallSiteContext(
@@ -103,6 +119,7 @@ public final class CallSiteContextResolver {
                 declaredType,
                 qualifiedType,
                 recordAccessor,
+                lombokGetter,
                 enumConstantReceiver,
                 call.call().receiver().map(this::isValueReceiver).orElse(false),
                 call.call().methodName(),
@@ -199,6 +216,10 @@ public final class CallSiteContextResolver {
             return Optional.empty();
         }
         Optional<ProjectTypeDeclaration> owner = uniqueType(receiverType.orElseThrow());
+        Optional<LombokGetterInfo> lombokGetter = exactLombokGetter(call);
+        if (lombokGetter.isPresent()) {
+            return lombokGetter.map(LombokGetterInfo::qualifiedReturnType);
+        }
         if (owner.isPresent() && owner.orElseThrow().type().kind() == TypeKind.RECORD
                 && call.call().arguments().isEmpty()) {
             ProjectTypeDeclaration record = owner.orElseThrow();
@@ -256,6 +277,99 @@ public final class CallSiteContextResolver {
                         .qualifyTypeShape(component.declaredType())
                         .map(returnType -> new RecordAccessorInfo(
                                 record.qualifiedName(), returnType, component)));
+    }
+
+    private Optional<LombokGetterInfo> exactLombokGetter(MethodCallExpression call) {
+        if (!call.call().arguments().isEmpty()
+                || call.call().receiver().isEmpty()
+                || call.call().receiver().filter(this::isValueReceiver).isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<String> receiverType = call.call().receiver().flatMap(this::qualifiedReceiverTypeOf);
+        Optional<ProjectTypeDeclaration> owner = receiverType.flatMap(this::uniqueType);
+        if (owner.isEmpty() || owner.orElseThrow().type().kind() != TypeKind.CLASS) {
+            return Optional.empty();
+        }
+        ProjectTypeDeclaration declaration = owner.orElseThrow();
+        if (!lombokNaming.defaultNamingSafe(declaration.file())) {
+            return Optional.empty();
+        }
+        LightweightTypeContext ownerTypeContext = ownerTypes(declaration);
+        List<VariableInfo> candidates = declaration.type().fields().stream()
+                .filter(field -> !field.staticMember())
+                .filter(field -> lombokGetterEnabled(declaration, field, ownerTypeContext))
+                .filter(field -> generatedGetterName(field).filter(call.call().methodName()::equals).isPresent())
+                .toList();
+        if (candidates.size() != 1) {
+            return Optional.empty();
+        }
+        boolean explicit = declaration.type().methods().stream()
+                .filter(method -> method.kind() == MethodKind.METHOD)
+                .anyMatch(method -> method.name().equalsIgnoreCase(call.call().methodName())
+                        && method.parameters().isEmpty());
+        if (explicit) {
+            return Optional.empty();
+        }
+        VariableInfo field = candidates.getFirst();
+        return ownerTypeContext.qualifyTypeShape(field.type())
+                .map(returnType -> new LombokGetterInfo(
+                        declaration.qualifiedName(), returnType, call.call().methodName(), field));
+    }
+
+    private static boolean lombokGetterEnabled(
+            ProjectTypeDeclaration owner,
+            VariableInfo field,
+            LightweightTypeContext ownerTypes) {
+        boolean typeAccessors = owner.type().annotations().stream()
+                .anyMatch(annotation -> ownerTypes.annotationMatches(
+                        annotation.name(), "lombok.experimental.Accessors"));
+        boolean fieldAccessors = field.annotations().stream()
+                .anyMatch(annotation -> ownerTypes.annotationMatches(
+                        annotation.name(), "lombok.experimental.Accessors"));
+        if (typeAccessors || fieldAccessors) {
+            return false;
+        }
+        List<com.totalsecurity.sast.ir.AnnotationInfo> fieldAnnotations = field.annotations().stream()
+                .filter(annotation -> ownerTypes.annotationMatches(annotation.name(), "lombok.Getter"))
+                .toList();
+        if (!fieldAnnotations.isEmpty()) {
+            return fieldAnnotations.size() == 1
+                    && fieldAnnotations.getFirst().arguments().isEmpty();
+        }
+        List<com.totalsecurity.sast.ir.AnnotationInfo> typeAnnotations = owner.type().annotations().stream()
+                .filter(annotation -> ownerTypes.annotationMatches(annotation.name(), "lombok.Getter"))
+                .toList();
+        return typeAnnotations.size() == 1
+                && typeAnnotations.getFirst().arguments().isEmpty();
+    }
+
+    private static Optional<String> generatedGetterName(VariableInfo field) {
+        String name = field.name();
+        if (name.isEmpty() || name.startsWith("$") || hasAmbiguousLombokCapitalization(name)) {
+            return Optional.empty();
+        }
+        if (field.type().trim().equals("boolean")
+                && name.startsWith("is")
+                && name.length() > 2
+                && Character.isUpperCase(name.codePointAt(2))) {
+            return Optional.of(name);
+        }
+        String prefix = field.type().trim().equals("boolean") ? "is" : "get";
+        return Optional.of(prefix + capitalize(name));
+    }
+
+    private static boolean hasAmbiguousLombokCapitalization(String name) {
+        return name.length() > 1
+                && Character.isLowerCase(name.codePointAt(0))
+                && Character.isUpperCase(name.codePointAt(1));
+    }
+
+    private static String capitalize(String name) {
+        int first = name.codePointAt(0);
+        return new StringBuilder(name.length())
+                .appendCodePoint(Character.toUpperCase(first))
+                .append(name.substring(Character.charCount(first)))
+                .toString();
     }
 
     private Optional<EnumConstantReferenceInfo> exactEnumConstant(Expression expression) {

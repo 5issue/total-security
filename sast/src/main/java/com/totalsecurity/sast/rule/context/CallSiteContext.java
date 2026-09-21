@@ -20,6 +20,7 @@ public record CallSiteContext(
         Optional<String> receiverDeclaredType,
         Optional<String> receiverQualifiedType,
         Optional<RecordAccessorInfo> recordAccessor,
+        Optional<LombokGetterInfo> lombokGetter,
         Optional<EnumConstantReferenceInfo> enumConstantReceiver,
         boolean receiverBoundToValue,
         String methodName,
@@ -36,6 +37,7 @@ public record CallSiteContext(
         receiverDeclaredType = Objects.requireNonNull(receiverDeclaredType, "receiverDeclaredType");
         receiverQualifiedType = Objects.requireNonNull(receiverQualifiedType, "receiverQualifiedType");
         recordAccessor = Objects.requireNonNull(recordAccessor, "recordAccessor");
+        lombokGetter = Objects.requireNonNull(lombokGetter, "lombokGetter");
         enumConstantReceiver = Objects.requireNonNull(enumConstantReceiver, "enumConstantReceiver");
         Objects.requireNonNull(methodName, "methodName");
         arguments = List.copyOf(arguments);

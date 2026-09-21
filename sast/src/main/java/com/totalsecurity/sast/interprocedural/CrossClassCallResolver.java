@@ -31,7 +31,7 @@ public final class CrossClassCallResolver {
             MethodCallExpression call,
             CallSiteContextResolver contexts) {
         CallSiteContext context = contexts.resolve(call);
-        if (context.recordAccessor().isPresent()) {
+        if (context.recordAccessor().isPresent() || context.lombokGetter().isPresent()) {
             return modeled(caller, call);
         }
         if (context.enumConstantReceiver()

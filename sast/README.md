@@ -15,7 +15,7 @@ Java source
 
 Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java 의미 추출기는 syntax tree에서 class, method, parameter, variable, assignment, method invocation, return, annotation 및 statement 구조를 추출해 자체 IR로 변환한다. CFG, DataFlow, Taint, rule 및 Finding 계층은 `TSNode`, `TSTree`, `org.treesitter` 타입이나 Tree-sitter node type 문자열에 직접 의존하지 않는다.
 
-현재 구현은 STEP 1~22의 범위다.
+현재 구현은 STEP 1~24와 STEP 26A/26B/26C의 범위다.
 
 - STEP 1: Tree-sitter Java parsing 및 syntax tree 순회
 - STEP 2/2B: Java 의미 추출, Expression IR, lexical/structural 순서를 보존하는 ordered Statement IR
@@ -30,6 +30,10 @@ Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java �
 - STEP 22/22B/22C: 보수적인 Java type qualification, assignability 및 overload resolution 정교화
 - STEP 23: top-level record/enum extraction과 source declaration으로 증명된 exact accessor/enum constant semantics
 - STEP 24: source hierarchy로 증명된 unique project interface 구현체에 한정한 보수적 dispatch
+- STEP 25: 개발 중 backend snapshot을 이용한 read-only unsupported coverage audit. resolver 기능 자체를 추가한 단계는 아니다.
+- STEP 26A: source로 증명된 기본 Lombok `@Getter` synthetic accessor semantics
+- STEP 26B: Lombok naming configuration 및 explicit method suppression에 대한 보수적 correctness 보강
+- STEP 26C: Lombok config import가 존재할 때 default naming을 추측하지 않는 fail-closed 보강
 
 이 엔진은 finding이 0개라는 사실을 대상이 안전하다는 증명으로 해석하지 않는다. parse/semantic failure와 지원하지 않는 호출 또는 구문은 별도로 보존하며, 지원 범위 밖의 의미를 추측해 성공한 분석으로 표시하지 않는다.
 
@@ -306,7 +310,7 @@ Top-level `record`와 `enum`을 class/interface와 구분된 project type으로 
 
 - 유일한 exact project record의 instance-value receiver, 실제 component name, argument 0개가 모두 증명되고 동일 signature의 explicit method가 없을 때만 compiler-provided accessor return type을 component declared type으로 제공한다.
 - analyzable explicit accessor가 있으면 normal project method resolution과 body summary가 synthetic component semantics보다 우선한다.
-- exact synthetic record accessor에만 receiver-derived taint를 적용하며 arbitrary getter, Lombok getter 또는 다른 zero-argument method로 일반화하지 않는다.
+- exact synthetic record accessor에만 receiver-derived taint를 적용하며 arbitrary getter 또는 다른 zero-argument method로 일반화하지 않는다.
 - source-declared enum constant field access는 해당 enum의 exact type을 유지한다. constant-specific class body가 있는 호출은 runtime override target을 선택하지 않고 unsupported dynamic dispatch로 남긴다.
 - duplicate FQN은 record accessor나 enum constant declaration을 임의 선택하지 않는다.
 
@@ -323,6 +327,19 @@ Receiver가 duplicate가 아닌 exact unique project interface type에 bound된 
 - `@Primary`, `@Qualifier`, bean name 및 Spring container injection resolution은 지원하지 않는다.
 - interface default method, external superclass inherited method, runtime override 및 record/enum implementation dispatch는 추측하지 않는다.
 - resolve된 call은 기존 STEP 19 project summary와 5개 pure-taint category만 재사용하며, interface와 선택된 implementation 정보를 call provenance에 보존한다.
+
+## STEP 26A/26B/26C 보수적 Lombok getter semantics
+
+Default naming을 사용하는 `lombok.Getter`가 exact FQN, explicit import 또는 모호하지 않은 import context로 증명되고 실제 source field가 존재하며 project configuration상 default naming이 안전하다고 판단될 때만 compiler-generated getter를 모델링한다. Class-level 및 field-level `@Getter`를 지원하며, 생성 예정 이름과 대소문자 구분 없이 일치하는 zero-argument source method가 있으면 synthetic semantics를 적용하지 않는다.
+
+- parameter, field, resolved local 또는 return type이 증명된 call-chain의 instance-value receiver만 지원한다. Type-name/static-style 및 unresolved receiver는 제외한다.
+- primitive `boolean`은 default `isXxx` convention을 사용하고 wrapper `Boolean`은 `getXxx`로 구분한다. 이름 대문자화가 Lombok configuration에 따라 달라질 수 있는 edge case는 추측하지 않는다.
+- return type은 source field의 declared type을 STEP 22의 현재 qualification/generic 범위 안에서 사용한다.
+- exact synthetic getter에 한해 whole-receiver may-taint를 return으로 전파한다. 이는 field-sensitive heap 또는 alias analysis가 아니다.
+- annotation argument가 있는 `@Getter`는 `AccessLevel.NONE`을 포함해 이번 단계에서 모델링하지 않는다. Static field getter도 instance getter로 처리하지 않는다.
+- Exact `lombok.experimental.Accessors`가 type 또는 field에 있으면 fluent/prefix semantics를 추측하지 않고 해당 getter modeling을 중단한다.
+- Source file에 적용될 수 있는 상위 `lombok.config`에서 `lombok.accessors.fluent`, `lombok.accessors.prefix`, `lombok.accessors.capitalization` 또는 `lombok.getter.noIsPrefix` key가 발견되거나 config를 안전하게 확인할 수 없으면 default getter modeling을 중단한다. `import` directive도 target을 따라가거나 merge하지 않고 configuration uncertainty로 보아 fail-closed로 modeling을 중단한다. Full Lombok configuration inheritance/value/import 해석은 지원하지 않는다.
+- annotation이 없는 arbitrary JavaBeans getter, `@Data`, `@Value`, `@Builder`, `@Slf4j`, constructor generation 및 external Lombok-generated member는 STEP 26A/26B/26C 범위가 아니다.
 
 ## 외부 경로 Project Runner
 
