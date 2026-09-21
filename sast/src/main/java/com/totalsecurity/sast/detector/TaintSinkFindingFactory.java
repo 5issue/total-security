@@ -208,6 +208,7 @@ public final class TaintSinkFindingFactory {
             case REDIRECT_TARGET -> "HTTP redirect target";
             case HTTP_RESPONSE_BODY -> "HTTP response body";
             case FILE_UPLOAD_TARGET -> "File upload destination";
+            case REFRESH_TOKEN_PERSISTENCE -> "Refresh-token persistence payload";
         };
         return subject + " argument " + argumentIndex + " of " + sink.call().call().methodName();
     }

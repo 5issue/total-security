@@ -1,6 +1,8 @@
 package com.totalsecurity.sast.runner;
 
 import com.totalsecurity.sast.detector.deserialization.InsecureDeserializationDetector;
+import com.totalsecurity.sast.detector.authn.Authn11AnalysisResult;
+import com.totalsecurity.sast.detector.authn.Authn11PlaintextRefreshTokenStorageDetector;
 import com.totalsecurity.sast.detector.redirect.OpenRedirectDetector;
 import com.totalsecurity.sast.detector.upload.UnrestrictedFileUploadDetector;
 import com.totalsecurity.sast.detector.xss.XssDetector;
@@ -124,6 +126,25 @@ public final class ProjectScanner {
                         ProjectScanStage.ANALYSIS,
                         "Project analysis failed: " + safeMessage(exception),
                         true));
+            }
+            try {
+                Authn11AnalysisResult authn11 =
+                        new Authn11PlaintextRefreshTokenStorageDetector()
+                                .analyze(extractedFiles, lombokNaming);
+                findings.addAll(authn11.findings());
+                authn11.unsupported().forEach(item -> diagnostics.add(diagnostic(
+                        projectRoot,
+                        item.location().file(),
+                        ProjectScanStage.ANALYSIS,
+                        "AUTHN-11 unsupported: " + item.reason(),
+                        false)));
+            } catch (RuntimeException exception) {
+                diagnostics.add(diagnostic(
+                        projectRoot,
+                        null,
+                        ProjectScanStage.ANALYSIS,
+                        "AUTHN-11 analysis failed: " + safeMessage(exception),
+                        false));
             }
         }
 

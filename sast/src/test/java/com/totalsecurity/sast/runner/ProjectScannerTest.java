@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.totalsecurity.sast.detector.redirect.OpenRedirectDetector;
+import com.totalsecurity.sast.detector.authn.Authn11PlaintextRefreshTokenStorageDetector;
 import com.totalsecurity.sast.detector.sql.SqlInjectionDetector;
 import com.totalsecurity.sast.detector.xss.XssDetector;
 import com.totalsecurity.sast.interprocedural.UnsupportedInterproceduralReason;
@@ -21,6 +22,40 @@ import org.junit.jupiter.api.io.TempDir;
 class ProjectScannerTest {
     @TempDir
     Path temporaryDirectory;
+
+    @Test
+    void runsAuthn11PolicyAnalysisThroughDefaultProjectScan() throws Exception {
+        Path project = project("authn-11-project");
+        java(project, "src/main/java/example/RefreshStorage.java", """
+                package example;
+                import jakarta.persistence.Entity;
+                import org.springframework.data.jpa.repository.JpaRepository;
+                @Entity class RefreshTokenEntity {
+                    String token;
+                    RefreshTokenEntity(String token) { this.token = token; }
+                }
+                interface RefreshTokenRepository {
+                    <S extends RefreshTokenEntity> S save(S entity);
+                }
+                interface RefreshTokenJpaRepository
+                        extends JpaRepository<RefreshTokenEntity, Long>, RefreshTokenRepository {}
+                class RefreshStorage {
+                    RefreshTokenRepository repository;
+                    void store(String refreshToken) {
+                        repository.save(new RefreshTokenEntity(refreshToken));
+                    }
+                }
+                """);
+
+        ProjectScanResult result = scan(project);
+
+        var findings = result.findings().stream()
+                .filter(finding -> finding.ruleId().equals(
+                        Authn11PlaintextRefreshTokenStorageDetector.RULE_ID))
+                .toList();
+        assertEquals(1, findings.size());
+        assertTrue(findings.getFirst().cweReference().isEmpty());
+    }
 
     @Test
     void scansAnArbitraryExternalProjectRoot() throws Exception {

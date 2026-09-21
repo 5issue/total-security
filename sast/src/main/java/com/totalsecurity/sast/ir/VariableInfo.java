@@ -12,6 +12,8 @@ public record VariableInfo(
         List<AnnotationInfo> annotations,
         Optional<Expression> initializer,
         boolean staticMember,
+        boolean finalMember,
+        boolean transientMember,
         SourceLocation location) {
     public VariableInfo {
         Objects.requireNonNull(kind, "kind");
@@ -30,6 +32,18 @@ public record VariableInfo(
             List<AnnotationInfo> annotations,
             Optional<Expression> initializer,
             SourceLocation location) {
-        this(kind, name, type, annotations, initializer, false, location);
+        this(kind, name, type, annotations, initializer, false, false, false, location);
+    }
+
+    /** Compatibility constructor for variables that only supplied static-member metadata. */
+    public VariableInfo(
+            VariableKind kind,
+            String name,
+            String type,
+            List<AnnotationInfo> annotations,
+            Optional<Expression> initializer,
+            boolean staticMember,
+            SourceLocation location) {
+        this(kind, name, type, annotations, initializer, staticMember, false, false, location);
     }
 }

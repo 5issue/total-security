@@ -28,6 +28,7 @@ import com.totalsecurity.sast.ir.expression.UnknownExpression;
 import com.totalsecurity.sast.ir.expression.VariableReference;
 import com.totalsecurity.sast.ir.statement.BlockStatement;
 import com.totalsecurity.sast.ir.statement.BreakStatement;
+import com.totalsecurity.sast.ir.statement.CatchClauseInfo;
 import com.totalsecurity.sast.ir.statement.ContinueStatement;
 import com.totalsecurity.sast.ir.statement.DoWhileStatement;
 import com.totalsecurity.sast.ir.statement.EnhancedForStatement;
@@ -40,6 +41,7 @@ import com.totalsecurity.sast.ir.statement.SwitchCase;
 import com.totalsecurity.sast.ir.statement.SwitchCaseKind;
 import com.totalsecurity.sast.ir.statement.SwitchStatement;
 import com.totalsecurity.sast.ir.statement.ThrowStatement;
+import com.totalsecurity.sast.ir.statement.TryStatementInfo;
 import com.totalsecurity.sast.ir.statement.UnknownStatement;
 import com.totalsecurity.sast.ir.statement.VariableDeclarationStatement;
 import com.totalsecurity.sast.ir.statement.WhileStatement;
@@ -323,8 +325,55 @@ public final class JavaSemanticExtractor {
                     .<Statement>map(expression ->
                             new ThrowStatement(extractExpression(expression), location(node)))
                     .orElseGet(() -> unknownStatement(node));
+            case "try_statement" -> extractTryStatement(node);
             default -> unknownStatement(node);
         };
+    }
+
+    private UnknownStatement extractTryStatement(TSNode node) {
+        Optional<BlockStatement> body = field(node, "body")
+                .filter(child -> child.getType().equals("block"))
+                .map(this::extractBlock);
+        if (body.isEmpty()) {
+            return unknownStatement(node);
+        }
+
+        List<TSNode> catchNodes = namedChildren(node).stream()
+                .filter(child -> child.getType().equals("catch_clause"))
+                .toList();
+        List<CatchClauseInfo> catches = catchNodes.stream()
+                .map(this::extractCatchClause)
+                .flatMap(Optional::stream)
+                .toList();
+        if (catches.size() != catchNodes.size()) {
+            return unknownStatement(node);
+        }
+        Optional<TSNode> finallyClause = namedChildren(node).stream()
+                .filter(child -> child.getType().equals("finally_clause"))
+                .findFirst();
+        Optional<BlockStatement> finallyBlock = finallyClause
+                .flatMap(clause -> namedChildren(clause).stream()
+                        .filter(child -> child.getType().equals("block"))
+                        .findFirst())
+                .map(this::extractBlock);
+        if (finallyClause.isPresent() && finallyBlock.isEmpty()) {
+            return unknownStatement(node);
+        }
+        boolean resourcesPresent = namedChildren(node).stream()
+                .anyMatch(child -> child.getType().equals("resource_specification"));
+        TryStatementInfo structure = new TryStatementInfo(
+                body.orElseThrow(), catches, finallyBlock, resourcesPresent, location(node));
+        return new UnknownStatement(
+                node.getType(), text(node), location(node), Optional.of(structure));
+    }
+
+    private Optional<CatchClauseInfo> extractCatchClause(TSNode clause) {
+        return field(clause, "body")
+                .filter(child -> child.getType().equals("block"))
+                .or(() -> namedChildren(clause).stream()
+                        .filter(child -> child.getType().equals("block"))
+                        .findFirst())
+                .map(body -> new CatchClauseInfo(extractBlock(body), location(clause)));
     }
 
     private IfStatement extractIf(TSNode node) {
@@ -468,7 +517,8 @@ public final class JavaSemanticExtractor {
                     "switch_expression",
                     "break_statement",
                     "continue_statement",
-                    "throw_statement" -> true;
+                    "throw_statement",
+                    "try_statement" -> true;
             default -> false;
         };
     }
@@ -512,6 +562,8 @@ public final class JavaSemanticExtractor {
                     annotations,
                     initializer,
                     kind == VariableKind.FIELD && hasModifier(declaration, "static"),
+                    kind == VariableKind.FIELD && hasModifier(declaration, "final"),
+                    kind == VariableKind.FIELD && hasModifier(declaration, "transient"),
                     location(child)));
         }
         return List.copyOf(variables);

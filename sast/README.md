@@ -398,6 +398,16 @@ Pattern Analysis는 DataFlow/Taint vulnerability detector와 분리되어 있다
 - 제공된 체크리스트에 CWE가 명시되지 않아 임의 CWE를 부여하지 않으며, checklist identity는 `AUTHN-06`과 별도 Rule ID로 보존한다.
 - 이 rule은 기존 `HARDCODED_CREDENTIAL`/CWE-798 의미를 변경하지 않는다. 하나의 literal이 두 규칙의 독립적인 조건을 모두 만족하면 별도 finding이 생성될 수 있다.
 
+## AUTHN-11 refresh token 평문 저장
+
+`AUTHN_11_PLAINTEXT_REFRESH_TOKEN_STORAGE`는 supported source flow에서 증명된 raw refresh token이 exact project refresh-token entity의 persistent field로 전달되고, Spring Data JPA repository `save`에 연결되는 경우를 검사한다. 전용 source/hash/encoding semantics와 기존 CFG, reaching definitions, taint 및 project-local method summary를 사용하며 Pattern Analysis로 구현하지 않는다.
+
+- exact project `RefreshTokenHasher.hash(String)` source body에서 use-site reaching definition으로 raw parameter → SHA-256 `MessageDigest.digest` → hex return이 유일하게 증명된 cryptographic hash path만 finding하지 않는다. `try/catch` hash path는 supported local declaration과 단일 return으로 이루어진 straight-line statement shape 및 단순 wrapping-throw catch만 검증한다. 재할당·분기 병합·이름만 같은 `hash` method는 sanitizer가 아니며, 단순 Base64와 raw bytes의 hex encoding은 raw 의미를 전파한다. Algorithm field alias는 source에 `static final String` constant로 보존된 exact SHA-256 값만 지원한다.
+- parameter 또는 audited `JwtTokenProvider.issueRefreshToken` 결과에서 시작한 source-proven flow만 판정한다. 모든 `token` 이름이나 모든 `save` 호출을 source/sink로 간주하지 않는다.
+- 현재 persistent payload 증명은 exact record component, constructor의 단일 `this.field = parameter` assignment, local reaching definition과 argument 없는 exact `lombok.Builder` constructor mapping으로 제한된다. 이름만 같은 manual builder는 지원하지 않으며 static, Java `transient`, exact `jakarta.persistence.Transient` field는 persistence payload에서 제외한다. 지원하지 않는 builder/constructor, heap mutation, alias 또는 interprocedural shape는 안전 판정이 아니라 explicit unsupported/unknown이다.
+- 분석 결과는 source code의 supported path만 설명하며 실제 DB/runtime contents 전체나 운영환경 준수를 증명하지 않는다.
+- token literal/runtime value는 evidence에 포함하지 않는다. 제공된 체크리스트에 CWE가 없어 임의 CWE를 부여하지 않고 checklist identity `AUTHN-11`을 보존한다.
+
 ## 명시적 제한
 
 현재 구현은 다음을 지원하지 않거나 완전하게 분석하지 않는다.
