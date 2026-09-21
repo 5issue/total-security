@@ -67,12 +67,16 @@ public final class JavaSemanticExtractor {
             switch (child.getType()) {
                 case "package_declaration" -> packageName = extractPackageName(child);
                 case "import_declaration" -> imports.add(extractImport(child));
-                case "class_declaration" -> types.add(extractType(child, TypeKind.CLASS));
-                case "interface_declaration" -> types.add(extractType(child, TypeKind.INTERFACE));
-                case "record_declaration" -> types.add(extractType(child, TypeKind.RECORD));
-                case "enum_declaration" -> types.add(extractType(child, TypeKind.ENUM));
+                case "class_declaration" -> extractTopLevelType(
+                        child, TypeKind.CLASS, types);
+                case "interface_declaration" -> extractTopLevelType(
+                        child, TypeKind.INTERFACE, types);
+                case "record_declaration" -> extractTopLevelType(
+                        child, TypeKind.RECORD, types);
+                case "enum_declaration" -> extractTopLevelType(
+                        child, TypeKind.ENUM, types);
                 default -> {
-                    // Nested and unsupported top-level declarations remain outside this step.
+                    // Unsupported top-level declarations remain outside this step.
                 }
             }
         }
@@ -92,7 +96,37 @@ public final class JavaSemanticExtractor {
                 : withoutKeyword;
     }
 
-    private ClassInfo extractType(TSNode declaration, TypeKind kind) {
+    private void extractTopLevelType(
+            TSNode declaration, TypeKind kind, List<ClassInfo> types) {
+        ClassInfo topLevel = extractType(declaration, kind, List.of());
+        types.add(topLevel);
+        field(declaration, "body").ifPresent(body ->
+                extractDirectMemberRecordEnums(body, topLevel.name(), types));
+    }
+
+    /**
+     * Extracts only direct member records/enums of one top-level type. Nested classes and deeper
+     * member chains remain unsupported rather than being detached from an unindexed owner.
+     */
+    private void extractDirectMemberRecordEnums(
+            TSNode body, String enclosingTypeName, List<ClassInfo> types) {
+        for (TSNode member : namedChildren(body)) {
+            switch (member.getType()) {
+                case "record_declaration" -> types.add(extractType(
+                        member, TypeKind.RECORD, List.of(enclosingTypeName)));
+                case "enum_declaration" -> types.add(extractType(
+                        member, TypeKind.ENUM, List.of(enclosingTypeName)));
+                case "enum_body_declarations" ->
+                        extractDirectMemberRecordEnums(member, enclosingTypeName, types);
+                default -> {
+                    // Arbitrary nested classes/interfaces and deeper nesting are not STEP 27.
+                }
+            }
+        }
+    }
+
+    private ClassInfo extractType(
+            TSNode declaration, TypeKind kind, List<String> enclosingTypeNames) {
         String name = field(declaration, "name").map(this::text).orElse("<unnamed>");
         List<String> extendsTypes = extractDeclaredSupertypes(
                 declaration, "superclass", "extends_interfaces");
@@ -120,6 +154,7 @@ public final class JavaSemanticExtractor {
         return new ClassInfo(
                 kind,
                 name,
+                enclosingTypeNames,
                 hasModifier(declaration, "abstract"),
                 extendsTypes,
                 implementsTypes,

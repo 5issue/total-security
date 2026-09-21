@@ -15,7 +15,7 @@ Java source
 
 Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java 의미 추출기는 syntax tree에서 class, method, parameter, variable, assignment, method invocation, return, annotation 및 statement 구조를 추출해 자체 IR로 변환한다. CFG, DataFlow, Taint, rule 및 Finding 계층은 `TSNode`, `TSTree`, `org.treesitter` 타입이나 Tree-sitter node type 문자열에 직접 의존하지 않는다.
 
-현재 구현은 STEP 1~24와 STEP 26A/26B/26C의 범위다.
+현재 구현은 STEP 1~24와 STEP 26A/26B/26C 및 STEP 27의 범위다.
 
 - STEP 1: Tree-sitter Java parsing 및 syntax tree 순회
 - STEP 2/2B: Java 의미 추출, Expression IR, lexical/structural 순서를 보존하는 ordered Statement IR
@@ -34,6 +34,7 @@ Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java �
 - STEP 26A: source로 증명된 기본 Lombok `@Getter` synthetic accessor semantics
 - STEP 26B: Lombok naming configuration 및 explicit method suppression에 대한 보수적 correctness 보강
 - STEP 26C: Lombok config import가 존재할 때 default naming을 추측하지 않는 fail-closed 보강
+- STEP 27: exact project-local direct member record/enum extraction과 source canonical indexing
 
 이 엔진은 finding이 0개라는 사실을 대상이 안전하다는 증명으로 해석하지 않는다. parse/semantic failure와 지원하지 않는 호출 또는 구문은 별도로 보존하며, 지원 범위 밖의 의미를 추측해 성공한 분석으로 표시하지 않는다.
 
@@ -340,6 +341,16 @@ Default naming을 사용하는 `lombok.Getter`가 exact FQN, explicit import 또
 - Exact `lombok.experimental.Accessors`가 type 또는 field에 있으면 fluent/prefix semantics를 추측하지 않고 해당 getter modeling을 중단한다.
 - Source file에 적용될 수 있는 상위 `lombok.config`에서 `lombok.accessors.fluent`, `lombok.accessors.prefix`, `lombok.accessors.capitalization` 또는 `lombok.getter.noIsPrefix` key가 발견되거나 config를 안전하게 확인할 수 없으면 default getter modeling을 중단한다. `import` directive도 target을 따라가거나 merge하지 않고 configuration uncertainty로 보아 fail-closed로 modeling을 중단한다. Full Lombok configuration inheritance/value/import 해석은 지원하지 않는다.
 - annotation이 없는 arbitrary JavaBeans getter, `@Data`, `@Value`, `@Builder`, `@Slf4j`, constructor generation 및 external Lombok-generated member는 STEP 26A/26B/26C 범위가 아니다.
+
+## STEP 27 nested project record/enum
+
+Top-level type에 직접 선언된 exact project-local member `record`와 `enum`을 추출하고 `package.Outer.Nested` 형태의 source canonical identity로 index한다. Nested type에도 STEP 23의 record component/accessor 및 enum constant semantics를 그대로 재사용한다.
+
+- 지원 깊이는 top-level type의 직접 member 한 단계다. 임의 nested class를 경유하는 더 깊은 type, arbitrary nested class 자체, local/anonymous type은 지원하지 않는다.
+- simple name만으로 nested type을 선택하지 않으며 duplicate/ambiguous enclosing owner 또는 canonical FQN은 임의 선택하지 않는다.
+- same-package `Outer.Nested`, exact explicit nested-type import, 완전 수식 source name은 실제 project declaration이 증명될 때만 연결한다.
+- record accessor는 기존 instance-value receiver와 explicit method precedence를 유지하며 기존 receiver-derived may-taint model만 사용한다.
+- enum constant의 exact nested enum type만 보존한다. `name()`, `values()`, `valueOf()` 같은 compiler-generated enum method를 새로 추론하지 않는다.
 
 ## 외부 경로 Project Runner
 

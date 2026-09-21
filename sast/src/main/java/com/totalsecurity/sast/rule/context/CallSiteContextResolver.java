@@ -95,7 +95,7 @@ public final class CallSiteContextResolver {
         }
         this.projectTypes = Objects.requireNonNull(projectTypes, "projectTypes");
         this.lombokNaming = Objects.requireNonNull(lombokNaming, "lombokNaming");
-        this.types = new LightweightTypeContext(file, projectTypes::contains);
+        this.types = new LightweightTypeContext(file, projectTypes, enclosingClass);
     }
 
     public LightweightTypeContext types() {
@@ -187,8 +187,8 @@ public final class CallSiteContextResolver {
     private Optional<String> declaredTypeOf(VariableReference reference) {
         if (reference.name().equals("this")) {
             return Optional.of(file.packageName()
-                    .map(packageName -> packageName + "." + enclosingClass.name())
-                    .orElse(enclosingClass.name()));
+                    .map(packageName -> packageName + "." + enclosingClass.sourceName())
+                    .orElse(enclosingClass.sourceName()));
         }
         Optional<String> local = dataFlow.resolvedSymbol(reference).map(symbol -> symbol.declaredType());
         if (local.isPresent()) {
@@ -373,12 +373,11 @@ public final class CallSiteContextResolver {
     }
 
     private Optional<EnumConstantReferenceInfo> exactEnumConstant(Expression expression) {
-        if (!(expression instanceof FieldAccessExpression field)
-                || !(field.target() instanceof VariableReference ownerReference)
-                || isValueReference(ownerReference)) {
+        if (!(expression instanceof FieldAccessExpression field)) {
             return Optional.empty();
         }
-        Optional<String> ownerName = types.qualifyType(ownerReference.name());
+        Optional<String> ownerName = typeReferenceName(field.target())
+                .flatMap(types::qualifyType);
         if (ownerName.isEmpty()) {
             return Optional.empty();
         }
@@ -395,6 +394,9 @@ public final class CallSiteContextResolver {
     }
 
     private Optional<ProjectTypeDeclaration> uniqueType(String qualifiedName) {
+        if (projectTypes.isAmbiguous(qualifiedName)) {
+            return Optional.empty();
+        }
         List<ProjectTypeDeclaration> declarations = projectTypes.declarations(qualifiedName);
         if (declarations.size() == 1) {
             return Optional.of(declarations.getFirst());
@@ -410,11 +412,23 @@ public final class CallSiteContextResolver {
     }
 
     private LightweightTypeContext ownerTypes(ProjectTypeDeclaration owner) {
-        return new LightweightTypeContext(owner.file(), projectTypes::contains);
+        return new LightweightTypeContext(owner.file(), projectTypes, owner.type());
     }
 
     private String localQualifiedName(ClassInfo type) {
-        return file.packageName().map(name -> name + "." + type.name()).orElse(type.name());
+        return file.packageName().map(name -> name + "." + type.sourceName())
+                .orElse(type.sourceName());
+    }
+
+    private Optional<String> typeReferenceName(Expression expression) {
+        if (expression instanceof VariableReference reference) {
+            return isValueReference(reference) ? Optional.empty() : Optional.of(reference.name());
+        }
+        if (expression instanceof FieldAccessExpression field) {
+            return typeReferenceName(field.target())
+                    .map(owner -> owner + "." + field.fieldName());
+        }
+        return Optional.empty();
     }
 
     private boolean isValueReference(VariableReference reference) {

@@ -29,7 +29,7 @@ public final class SameClassCallResolver {
         this.file = Objects.requireNonNull(file, "file");
         this.type = Objects.requireNonNull(type, "type");
         ProjectClassIndex checkedProject = Objects.requireNonNull(project, "project");
-        this.types = new LightweightTypeContext(file, checkedProject::contains);
+        this.types = new LightweightTypeContext(file, checkedProject, type);
         this.compatibility = new ConservativeTypeCompatibility(checkedProject);
     }
 
@@ -106,7 +106,7 @@ public final class SameClassCallResolver {
         if (reference.name().equals("super")) {
             return Optional.of(UnsupportedInterproceduralReason.INHERITED_METHOD);
         }
-        String currentFqn = file.packageName().map(pkg -> pkg + "." + type.name()).orElse(type.name());
+        String currentFqn = ProjectClassIndex.qualifiedName(file, type);
         if (reference.name().equals(type.name()) || reference.name().equals(currentFqn)) {
             if (context.receiverBoundToValue()) {
                 return Optional.of(UnsupportedInterproceduralReason.DYNAMIC_RECEIVER);

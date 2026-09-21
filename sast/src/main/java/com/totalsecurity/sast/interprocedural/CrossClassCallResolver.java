@@ -87,7 +87,7 @@ public final class CrossClassCallResolver {
                     "Same-class value receivers require dynamic-dispatch reasoning");
         }
         List<ProjectClassEntry> owners = index.candidates(receiverType);
-        if (owners.size() > 1) {
+        if (index.isAmbiguous(receiverType)) {
             return unsupported(caller, call, UnsupportedInterproceduralReason.AMBIGUOUS_CLASS,
                     "Duplicate project class FQN " + receiverType);
         }
@@ -251,7 +251,8 @@ public final class CrossClassCallResolver {
 
     private boolean exactTypes(
             CallSiteContext context, MethodInfo method, ProjectClassEntry owner) {
-        LightweightTypeContext types = new LightweightTypeContext(owner.file(), index::contains);
+        LightweightTypeContext types = new LightweightTypeContext(
+                owner.file(), index, owner.type());
         for (int index = 0; index < context.argumentCount(); index++) {
             Optional<String> argument = context.argumentQualifiedTypes().get(index);
             if (argument.isEmpty()
@@ -265,7 +266,8 @@ public final class CrossClassCallResolver {
 
     private boolean hasKnownTypeMismatch(
             CallSiteContext context, MethodInfo method, ProjectClassEntry owner) {
-        LightweightTypeContext types = new LightweightTypeContext(owner.file(), index::contains);
+        LightweightTypeContext types = new LightweightTypeContext(
+                owner.file(), index, owner.type());
         for (int index = 0; index < context.argumentCount(); index++) {
             Optional<String> argument = context.argumentQualifiedTypes().get(index);
             if (argument.isPresent()
@@ -279,7 +281,8 @@ public final class CrossClassCallResolver {
 
     private ConservativeTypeCompatibility.Match match(
             CallSiteContext context, MethodInfo method, ProjectClassEntry owner) {
-        LightweightTypeContext types = new LightweightTypeContext(owner.file(), index::contains);
+        LightweightTypeContext types = new LightweightTypeContext(
+                owner.file(), index, owner.type());
         boolean unknown = false;
         for (int index = 0; index < context.argumentCount(); index++) {
             Optional<String> argument = context.argumentQualifiedTypes().get(index);

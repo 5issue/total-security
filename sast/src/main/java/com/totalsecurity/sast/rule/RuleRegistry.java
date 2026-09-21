@@ -188,7 +188,8 @@ public final class RuleRegistry {
         Objects.requireNonNull(dataFlow, "dataFlow");
         Objects.requireNonNull(projectTypes, "projectTypes");
         Objects.requireNonNull(lombokNaming, "lombokNaming");
-        LightweightTypeContext types = new LightweightTypeContext(file, projectTypes::contains);
+        LightweightTypeContext types = new LightweightTypeContext(
+                file, projectTypes, type);
         return new AnalysisInputs(types, new CallSiteContextResolver(
                 file, type, method, dataFlow, projectTypes, lombokNaming));
     }

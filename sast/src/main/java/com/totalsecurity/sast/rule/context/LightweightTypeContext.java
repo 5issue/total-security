@@ -1,6 +1,8 @@
 package com.totalsecurity.sast.rule.context;
 
+import com.totalsecurity.sast.ir.ClassInfo;
 import com.totalsecurity.sast.ir.JavaFileInfo;
+import com.totalsecurity.sast.ir.TypeKind;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -18,14 +20,49 @@ public final class LightweightTypeContext {
 
     private final JavaFileInfo file;
     private final Predicate<String> projectTypeExists;
+    private final Predicate<String> nestedProjectTypeExists;
+    private final Predicate<String> exactNestedProjectTypeExists;
+    private final Optional<ClassInfo> enclosingType;
 
     public LightweightTypeContext(JavaFileInfo file) {
-        this(file, ignored -> false);
+        this(file, ignored -> false, ignored -> false, ignored -> false, Optional.empty());
     }
 
     public LightweightTypeContext(JavaFileInfo file, Predicate<String> projectTypeExists) {
+        this(file, projectTypeExists, ignored -> false, ignored -> false, Optional.empty());
+    }
+
+    public LightweightTypeContext(
+            JavaFileInfo file, Predicate<String> projectTypeExists, ClassInfo enclosingType) {
+        this(file, projectTypeExists, ignored -> false, ignored -> false,
+                Optional.of(Objects.requireNonNull(enclosingType, "enclosingType")));
+    }
+
+    public LightweightTypeContext(
+            JavaFileInfo file, ProjectTypeLookup projectTypes, ClassInfo enclosingType) {
+        this(
+                file,
+                Objects.requireNonNull(projectTypes, "projectTypes")::contains,
+                qualifiedName -> projectTypes.declarations(qualifiedName).stream()
+                        .anyMatch(declaration -> !declaration.type()
+                                .enclosingTypeNames().isEmpty()),
+                qualifiedName -> isExactSupportedNestedType(projectTypes, qualifiedName),
+                Optional.of(Objects.requireNonNull(enclosingType, "enclosingType")));
+    }
+
+    private LightweightTypeContext(
+            JavaFileInfo file,
+            Predicate<String> projectTypeExists,
+            Predicate<String> nestedProjectTypeExists,
+            Predicate<String> exactNestedProjectTypeExists,
+            Optional<ClassInfo> enclosingType) {
         this.file = Objects.requireNonNull(file, "file");
         this.projectTypeExists = Objects.requireNonNull(projectTypeExists, "projectTypeExists");
+        this.nestedProjectTypeExists = Objects.requireNonNull(
+                nestedProjectTypeExists, "nestedProjectTypeExists");
+        this.exactNestedProjectTypeExists = Objects.requireNonNull(
+                exactNestedProjectTypeExists, "exactNestedProjectTypeExists");
+        this.enclosingType = Objects.requireNonNull(enclosingType, "enclosingType");
     }
 
     public JavaFileInfo file() {
@@ -38,7 +75,26 @@ public final class LightweightTypeContext {
             return Optional.empty();
         }
         if (type.contains(".")) {
-            return Optional.of(type);
+            if (isKnownProjectType(type)) {
+                return Optional.of(type);
+            }
+            Optional<String> samePackageNested = file.packageName()
+                    .map(packageName -> packageName + "." + type)
+                    .filter(nestedProjectTypeExists);
+            return samePackageNested.isPresent()
+                    ? samePackageNested
+                    : Optional.of(type);
+        }
+        Optional<String> enclosingMember = enclosingType
+                .map(owner -> owner.enclosingTypeNames().isEmpty()
+                        ? owner.name()
+                        : String.join(".", owner.enclosingTypeNames()))
+                .map(ownerName -> ownerName + "." + type)
+                .map(name -> file.packageName().map(packageName -> packageName + "." + name)
+                        .orElse(name))
+                .filter(exactNestedProjectTypeExists);
+        if (enclosingMember.isPresent()) {
+            return enclosingMember;
         }
         LinkedHashSet<String> candidates = new LinkedHashSet<>();
         for (String imported : file.imports()) {
@@ -165,9 +221,32 @@ public final class LightweightTypeContext {
         }
         return file.types().stream().anyMatch(candidate -> {
             String declared = file.packageName()
-                    .map(packageName -> packageName + "." + candidate.name())
-                    .orElse(candidate.name());
+                    .map(packageName -> packageName + "." + candidate.sourceName())
+                    .orElse(candidate.sourceName());
             return declared.equals(qualifiedName);
         });
+    }
+
+    private static boolean isExactSupportedNestedType(
+            ProjectTypeLookup projectTypes, String qualifiedName) {
+        if (projectTypes.isAmbiguous(qualifiedName)) {
+            return false;
+        }
+        List<ProjectTypeDeclaration> declarations = projectTypes.declarations(qualifiedName);
+        if (declarations.size() != 1) {
+            return false;
+        }
+        ProjectTypeDeclaration declaration = declarations.getFirst();
+        ClassInfo nestedType = declaration.type();
+        if (nestedType.enclosingTypeNames().size() != 1
+                || (nestedType.kind() != TypeKind.RECORD && nestedType.kind() != TypeKind.ENUM)) {
+            return false;
+        }
+        String ownerName = nestedType.enclosingTypeNames().getFirst();
+        String ownerQualifiedName = declaration.file().packageName()
+                .map(packageName -> packageName + "." + ownerName)
+                .orElse(ownerName);
+        return !projectTypes.isAmbiguous(ownerQualifiedName)
+                && projectTypes.declarations(ownerQualifiedName).size() == 1;
     }
 }

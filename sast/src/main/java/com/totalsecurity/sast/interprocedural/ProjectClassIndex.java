@@ -20,6 +20,7 @@ import java.util.Set;
 public final class ProjectClassIndex implements ProjectTypeLookup {
     private final Map<String, List<ProjectClassEntry>> byQualifiedName;
     private final Map<String, List<ProjectClassEntry>> bySimpleName;
+    private final Set<String> ambiguousQualifiedNames;
 
     public ProjectClassIndex(Collection<JavaFileInfo> files) {
         Objects.requireNonNull(files, "files");
@@ -36,6 +37,24 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
         }
         this.byQualifiedName = immutableLists(qualified);
         this.bySimpleName = immutableLists(simple);
+        LinkedHashSet<String> ambiguous = new LinkedHashSet<>();
+        this.byQualifiedName.forEach((name, entries) -> {
+            if (entries.size() > 1) {
+                ambiguous.add(name);
+            }
+        });
+        for (ProjectClassEntry entry : entries()) {
+            if (entry.type().enclosingTypeNames().isEmpty()) {
+                continue;
+            }
+            String outerName = entry.file().packageName()
+                    .map(name -> name + "." + entry.type().enclosingTypeNames().getFirst())
+                    .orElse(entry.type().enclosingTypeNames().getFirst());
+            if (this.byQualifiedName.getOrDefault(outerName, List.of()).size() != 1) {
+                ambiguous.add(entry.qualifiedName());
+            }
+        }
+        this.ambiguousQualifiedNames = Collections.unmodifiableSet(ambiguous);
     }
 
     public List<ProjectClassEntry> candidates(String qualifiedName) {
@@ -44,7 +63,9 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
 
     public Optional<ProjectClassEntry> uniqueClass(String qualifiedName) {
         List<ProjectClassEntry> candidates = candidates(qualifiedName);
-        return candidates.size() == 1 ? Optional.of(candidates.getFirst()) : Optional.empty();
+        return candidates.size() == 1 && !isAmbiguous(qualifiedName)
+                ? Optional.of(candidates.getFirst())
+                : Optional.empty();
     }
 
     public boolean contains(String qualifiedName) {
@@ -57,6 +78,11 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
                 .map(entry -> new ProjectTypeDeclaration(
                         entry.qualifiedName(), entry.file(), entry.type()))
                 .toList();
+    }
+
+    @Override
+    public boolean isAmbiguous(String qualifiedName) {
+        return ambiguousQualifiedNames.contains(qualifiedName);
     }
 
     /** Exact, project-local declared subtype traversal. Duplicate or unresolved types stop proof. */
@@ -90,6 +116,7 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
         return byQualifiedName.values().stream()
                 .filter(entries -> entries.size() == 1)
                 .map(List::getFirst)
+                .filter(entry -> !isAmbiguous(entry.qualifiedName()))
                 .toList();
     }
 
@@ -99,22 +126,17 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
     }
 
     public Set<String> ambiguousQualifiedNames() {
-        LinkedHashSet<String> result = new LinkedHashSet<>();
-        byQualifiedName.forEach((name, entries) -> {
-            if (entries.size() > 1) {
-                result.add(name);
-            }
-        });
-        return Collections.unmodifiableSet(result);
+        return ambiguousQualifiedNames;
     }
 
     public List<ProjectClassEntry> ambiguousEntries(String qualifiedName) {
         List<ProjectClassEntry> entries = candidates(qualifiedName);
-        return entries.size() > 1 ? entries : List.of();
+        return isAmbiguous(qualifiedName) ? entries : List.of();
     }
 
     public static String qualifiedName(JavaFileInfo file, ClassInfo type) {
-        return file.packageName().map(name -> name + "." + type.name()).orElse(type.name());
+        return file.packageName().map(name -> name + "." + type.sourceName())
+                .orElse(type.sourceName());
     }
 
     private boolean isDeclaredSubtypeOf(
@@ -133,7 +155,8 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
             return false;
         }
         ProjectClassEntry current = entry.orElseThrow();
-        LightweightTypeContext types = new LightweightTypeContext(current.file(), this::contains);
+        LightweightTypeContext types = new LightweightTypeContext(
+                current.file(), this, current.type());
         return java.util.stream.Stream.concat(
                         current.type().extendsTypes().stream(),
                         current.type().implementsTypes().stream())
@@ -151,7 +174,8 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
         if (!visited.add(subtype.qualifiedName())) {
             return false;
         }
-        LightweightTypeContext types = new LightweightTypeContext(subtype.file(), this::contains);
+        LightweightTypeContext types = new LightweightTypeContext(
+                subtype.file(), this, subtype.type());
         return java.util.stream.Stream.concat(
                         subtype.type().extendsTypes().stream(),
                         subtype.type().implementsTypes().stream())
@@ -164,7 +188,7 @@ public final class ProjectClassIndex implements ProjectTypeLookup {
     }
 
     private boolean isAmbiguousProjectType(String qualifiedName) {
-        return candidates(qualifiedName).size() > 1;
+        return isAmbiguous(qualifiedName);
     }
 
     private static Map<String, List<ProjectClassEntry>> immutableLists(

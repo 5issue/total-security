@@ -10,6 +10,10 @@ public interface ProjectTypeLookup {
 
     List<ProjectTypeDeclaration> declarations(String qualifiedName);
 
+    default boolean isAmbiguous(String qualifiedName) {
+        return false;
+    }
+
     static ProjectTypeLookup none() {
         return existenceOnly(ignored -> false);
     }
