@@ -15,7 +15,7 @@ Java source
 
 Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java 의미 추출기는 syntax tree에서 class, method, parameter, variable, assignment, method invocation, return, annotation 및 statement 구조를 추출해 자체 IR로 변환한다. CFG, DataFlow, Taint, rule 및 Finding 계층은 `TSNode`, `TSTree`, `org.treesitter` 타입이나 Tree-sitter node type 문자열에 직접 의존하지 않는다.
 
-현재 구현은 STEP 1~24와 STEP 26A/26B/26C 및 STEP 27의 범위다.
+현재 구현은 STEP 1~24와 STEP 26A/26B/26C, STEP 27/27B 및 STEP 28의 범위다.
 
 - STEP 1: Tree-sitter Java parsing 및 syntax tree 순회
 - STEP 2/2B: Java 의미 추출, Expression IR, lexical/structural 순서를 보존하는 ordered Statement IR
@@ -34,7 +34,8 @@ Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java �
 - STEP 26A: source로 증명된 기본 Lombok `@Getter` synthetic accessor semantics
 - STEP 26B: Lombok naming configuration 및 explicit method suppression에 대한 보수적 correctness 보강
 - STEP 26C: Lombok config import가 존재할 때 default naming을 추측하지 않는 fail-closed 보강
-- STEP 27: exact project-local direct member record/enum extraction과 source canonical indexing
+- STEP 27/27B: exact project-local direct member record/enum extraction, source canonical indexing 및 enclosing member shadowing precedence 보강
+- STEP 28: 독립된 controlled fixture와 manifest를 이용한 ground-truth vulnerability benchmark
 
 이 엔진은 finding이 0개라는 사실을 대상이 안전하다는 증명으로 해석하지 않는다. parse/semantic failure와 지원하지 않는 호출 또는 구문은 별도로 보존하며, 지원 범위 밖의 의미를 추측해 성공한 분석으로 표시하지 않는다.
 
@@ -424,6 +425,8 @@ Tree-sitter Java grammar와 Java binding 버전은 `build.gradle.kts`에 고정�
 ```
 
 Gradle 내부 cache와 build output은 `sast/.gitignore`에서 제외한다.
+
+STEP 28 benchmark의 case, ground truth, TP/FP/FN/TN 정의, complexity 분포와 현재 측정 결과는 [BENCHMARK.md](BENCHMARK.md)에 기록한다. 이 수치는 통제된 23개 fixture에만 해당하며 실제 프로젝트 전체의 정확도를 대표하지 않는다.
 
 ## Java syntax tree 출력
 

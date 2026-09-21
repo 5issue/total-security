@@ -1,0 +1,24 @@
+caseId	ruleId	vulnerability	cwe	expected	sourceFile	expectedFindingCount	complexity	rationale
+sql-direct-vulnerable	SQL_INJECTION	SQL Injection	CWE-89	VULNERABLE	src/main/java/benchmark/sql/SqlDirectVulnerable.java	1	L1	Request parameter is concatenated into JDBC Statement SQL text.
+sql-cross-vulnerable	SQL_INJECTION	SQL Injection	CWE-89	VULNERABLE	src/main/java/benchmark/sql/SqlCrossService.java	1	L3	Controller input crosses an exact project-local service call into JDBC SQL text.
+sql-prepared-safe	SQL_INJECTION	SQL Injection	CWE-89	SAFE	src/main/java/benchmark/sql/SqlPreparedSafe.java	0	L1	SQL text is constant and tainted data is only a prepared-statement value.
+command-helper-vulnerable	OS_COMMAND_INJECTION	OS Command Injection	CWE-78	VULNERABLE	src/main/java/benchmark/command/CommandHelperVulnerable.java	1	L2	Request input reaches Runtime.exec through an exact same-class helper.
+command-constant-safe	OS_COMMAND_INJECTION	OS Command Injection	CWE-78	SAFE	src/main/java/benchmark/command/CommandConstantSafe.java	0	L1	Runtime.exec receives a constant command while request input is unused.
+path-record-vulnerable	PATH_TRAVERSAL	Path Traversal	CWE-22	VULNERABLE	src/main/java/benchmark/path/PathRecordVulnerable.java	1	L4	Request-body record component reaches Path.of and Files.readString.
+path-constant-safe	PATH_TRAVERSAL	Path Traversal	CWE-22	SAFE	src/main/java/benchmark/path/PathConstantSafe.java	0	L1	Filesystem sink receives a constant Path.
+ssrf-direct-vulnerable	SSRF	Server-Side Request Forgery	CWE-918	VULNERABLE	src/main/java/benchmark/ssrf/SsrfVulnerable.java	1	L1	Request parameter is the RestTemplate request target.
+ssrf-target-safe	SSRF	Server-Side Request Forgery	CWE-918	SAFE	src/main/java/benchmark/ssrf/SsrfSafe.java	0	L1	RestTemplate target is constant and tainted data is only the request body.
+ldap-filter-vulnerable	LDAP_INJECTION	LDAP Injection	CWE-90	VULNERABLE	src/main/java/benchmark/ldap/LdapVulnerable.java	1	L1	Request input is concatenated into JNDI search filter argument one.
+ldap-filter-safe	LDAP_INJECTION	LDAP Injection	CWE-90	SAFE	src/main/java/benchmark/ldap/LdapSafe.java	0	L1	JNDI search filter is constant.
+xss-writer-vulnerable	XSS	Cross-Site Scripting (XSS)	CWE-79	VULNERABLE	src/main/java/benchmark/xss/XssVulnerable.java	1	L1	Request input is written to a servlet response PrintWriter.
+xss-escaped-safe	XSS	Cross-Site Scripting (XSS)	CWE-79	SAFE	src/main/java/benchmark/xss/XssEscapedSafe.java	0	L1	Exact Spring HtmlUtils.htmlEscape sanitizes output before the response writer.
+xxe-explicit-vulnerable	XXE	XML External Entity (XXE)	CWE-611	VULNERABLE	src/main/java/benchmark/xxe/XxeVulnerable.java	1	L1	External general entities and external DTD access are explicitly enabled before parsing request XML.
+xxe-disabled-safe	XXE	XML External Entity (XXE)	CWE-611	SAFE	src/main/java/benchmark/xxe/XxeSafe.java	0	L1	DOCTYPE and external entity resolution are explicitly disabled before parsing.
+redirect-direct-vulnerable	OPEN_REDIRECT	Open Redirect	CWE-601	VULNERABLE	src/main/java/benchmark/redirect/RedirectVulnerable.java	1	L1	Request input controls the complete servlet redirect target.
+redirect-constant-safe	OPEN_REDIRECT	Open Redirect	CWE-601	SAFE	src/main/java/benchmark/redirect/RedirectSafe.java	0	L1	Servlet redirect target is a fixed local path.
+deserialization-body-vulnerable	INSECURE_DESERIALIZATION	Insecure Deserialization	CWE-502	VULNERABLE	src/main/java/benchmark/deserialization/DeserializationVulnerable.java	1	L1	Request bytes back an ObjectInputStream used by readObject.
+deserialization-internal-safe	INSECURE_DESERIALIZATION	Insecure Deserialization	CWE-502	SAFE	src/main/java/benchmark/deserialization/DeserializationSafe.java	0	L1	ObjectInputStream bytes are not an external source.
+upload-original-name-vulnerable	UNRESTRICTED_FILE_UPLOAD	Unrestricted File Upload	CWE-434	VULNERABLE	src/main/java/benchmark/upload/UploadVulnerable.java	1	L1	External MultipartFile is stored under its attacker-controlled original filename.
+upload-fixed-name-safe	UNRESTRICTED_FILE_UPLOAD	Unrestricted File Upload	CWE-434	SAFE	src/main/java/benchmark/upload/UploadSafe.java	0	L1	External MultipartFile is stored under a fixed filename.
+credential-literal-vulnerable	HARDCODED_CREDENTIAL	Hardcoded Credential	CWE-798	VULNERABLE	src/main/java/benchmark/credential/CredentialVulnerable.java	1	L1	Nonblank literal is assigned to a structurally sensitive identifier.
+credential-runtime-safe	HARDCODED_CREDENTIAL	Hardcoded Credential	CWE-798	SAFE	src/main/java/benchmark/credential/CredentialSafe.java	0	L1	Sensitive identifier is initialized from the environment rather than a literal.
