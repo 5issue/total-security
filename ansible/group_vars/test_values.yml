@@ -74,6 +74,18 @@ mysql_login_password: "InfraCheckTest!2026"
 pg_login_user: postgres
 pg_login_password: "InfraCheckTest!2026"
 
+# 2026-09-20 dbms_admin_connections 도입분 — 로컬 VM엔 K8s Secret이 없어 mysql.yml/
+# postgresql.yml의 admin 계정 lookup(kubernetes.core.k8s)이 항상 실패한다(ignore_errors로
+# 넘어가지만 mysql_admin_user/pg_admin_user가 undefined로 남아 D-01/02/04/06/08/11/17/
+# 18/20/21 전체가 "조회 실패"로 FAIL됨 — 판정 로직 검증 불가). extra-vars는 set_fact보다
+# 우선순위가 높아 위 mysql_login_user/pg_login_user와 동일한 방식으로 여기서 덮어쓴다.
+# VM3은 root/postgres 계정이 이미 전체 권한을 갖고 있어(dbms_target.sh) admin 계정도
+# 동일 계정·비밀번호를 그대로 사용.
+mysql_admin_user: root
+mysql_admin_password: "InfraCheckTest!2026"
+pg_admin_user: postgres
+pg_admin_password: "InfraCheckTest!2026"
+
 dbms_connections:
   - service: vm3-mysql
     engine: mysql

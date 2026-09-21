@@ -46,6 +46,14 @@
   vars:
     check_results: []
     check_round: "정기점검"
+  pre_tasks:
+    # localhost 대상 play가 여러 개(DBMS/인증_인가)라 set_fact로 쌓인 check_results가
+    # host fact로 남아 위 vars: check_results: [] 보다 우선순위가 높음 — roles 실행 전
+    # 명시적으로 초기화해야 이전 play(서버 점검 중 delegate_to: localhost로 실행된 태스크는
+    # set_fact가 아니므로 무해)와 이후 인증_인가 play 결과가 서로 섞이지 않는다.
+    - name: "check_results 초기화 (동일 host localhost 대상 이전 play 누적 방지)"
+      ansible.builtin.set_fact:
+        check_results: []
   roles:
     - dbms_common
   tasks:
@@ -64,6 +72,12 @@
   vars:
     check_results: []
     check_round: "정기점검"
+  pre_tasks:
+    # 위 DBMS 점검 play도 hosts: localhost라 set_fact로 쌓인 check_results가 host fact로
+    # 남아있음 — roles 실행 전 명시적으로 초기화(DBMS 점검 play의 동일 주석 참고).
+    - name: "check_results 초기화 (동일 host localhost 대상 이전 play 누적 방지)"
+      ansible.builtin.set_fact:
+        check_results: []
   roles:
     - auth_authz
   tasks:
