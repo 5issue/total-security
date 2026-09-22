@@ -30,9 +30,12 @@ __pycache__/
 # --- Ansible 점검 실행 결과(생성물, 소스 아님) ---
 ansible/results/*
 !ansible/results/.gitkeep
+delivery/ansible/results/*
+!delivery/ansible/results/.gitkeep
 
 # --- 점검 결과 산출물(날짜별 폴더, 생성물, 소스 아님) ---
-results/
+/results/
+delivery/results/
 
 # --- 로컬 테스트 환경(test/) — Vagrant/Terraform/SSH 비밀·캐시 ---
 test/.vagrant/

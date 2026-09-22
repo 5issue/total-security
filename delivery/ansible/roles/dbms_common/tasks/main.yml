@@ -8,6 +8,7 @@
       group_vars/all.yml 에 DB host/port/secret_ref 확정 후 재실행 필요.
   when: dbms_connections | length == 0
 
+# dbms_connections 비어 있을 때: 코드가 작성된 D-항목마다 SKIP 행 1건씩 생성
 - name: "DBMS | 커넥션 없을 때 SKIP 행 생성"
   vars:
     dbms_coded_items:
@@ -40,6 +41,7 @@
     label: "{{ item.id }}"
   when: dbms_connections | length == 0
 
+# dbms_connections 있을 때: 엔진별 SQL 점검 + 파드레벨 점검 실행
 - name: "MySQL 대상 SQL 점검 실행"
   ansible.builtin.include_tasks: mysql.yml
   loop: "{{ dbms_connections | selectattr('engine', 'equalto', 'mysql') | list }}"
@@ -64,7 +66,7 @@
     label: "{{ db_conn.service }}"
   when: dbms_connections | length > 0
 
-# D-26 | 감사기록 보관기간
+# D-26 | 감사기록 보관기간 (DB 접속 여부와 무관하게 항상 실행)
 - name: "D-26 | DBMS 감사기록 보관기간 점검 — mgmt 서버 AWS API 조회"
   ansible.builtin.include_role:
     name: log_patch_check

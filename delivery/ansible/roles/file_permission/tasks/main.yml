@@ -1,5 +1,5 @@
 ---
-# roles/file_permission — 서버 파일·디렉터리 권한 점검
+# roles/file_permission — 서버 U-14~U-30 계열(파일 및 디렉터리 권한) 점검
 
 # U-14 | PATH 환경변수 관리 (PATH에 "." 포함 금지)
 - name: "U-14 | root PATH 조회"
@@ -124,14 +124,30 @@
     path: /etc/rsyslog.conf
   register: u21_stat
 
+- name: "U-21 | systemd-journald 활성 상태 조회(rsyslog.conf 없을 때만)"
+  ansible.builtin.command: systemctl is-active systemd-journald
+  register: u21_journald_raw
+  changed_when: false
+  failed_when: false
+  when: not u21_stat.stat.exists
+
 - name: "U-21 | 판정 기록"
   vars:
     u21_ok: "{{ u21_stat.stat.exists and (u21_stat.stat.mode | int(base=8)) <= (u21_syslog_perm_max | int(base=8)) and u21_stat.stat.pw_name == 'root' }}"
+    u21_journald_active: "{{ (u21_journald_raw.stdout | default('') | trim) == 'active' if u21_journald_raw is defined else false }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-21', 'item': 'rsyslog.conf 파일 보호',
-      'status': 'PASS' if u21_ok else 'FAIL',
-      'detail': ('rsyslog.conf 없음' if not u21_stat.stat.exists else ('owner=' ~ u21_stat.stat.pw_name ~ ' mode=' ~ u21_stat.stat.mode ~ ' (기준 <= ' ~ u21_syslog_perm_max ~ ')'))
+      'status': (
+        'PASS' if u21_ok
+        else ('N/A' if (not u21_stat.stat.exists and u21_journald_active)
+        else 'FAIL')
+      ),
+      'detail': (
+        'owner=' ~ u21_stat.stat.pw_name ~ ' mode=' ~ u21_stat.stat.mode ~ ' (기준 <= ' ~ u21_syslog_perm_max ~ ')' if u21_stat.stat.exists
+        else ('rsyslog.conf 없음, systemd-journald가 표준 로거로 active 상태(AL2023 — 인프라팀 확정) — N/A' if u21_journald_active
+        else 'rsyslog.conf 없음, systemd-journald도 active 아님 — 로깅 메커니즘 확인 필요')
+      )
     }] }}"
 
 # U-22 | services 파일 보호
@@ -150,7 +166,7 @@
       'detail': 'owner=' ~ u22_stat.stat.pw_name ~ ' mode=' ~ u22_stat.stat.mode ~ ' (기준 <= ' ~ u22_services_perm_max ~ ')'
     }] }}"
 
-# U-23 | SUID/SGID 설정 점검
+# U-23 | SUID/SGID 설정 점검 [확정 기준값: group_vars/all.yml]
 - name: "U-23 | SUID/SGID 파일 조회 (로컬 파일시스템만, -xdev)"
   ansible.builtin.shell: "set -o pipefail && timeout 90 find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) 2>/dev/null"
   args:
@@ -268,39 +284,47 @@
       'detail': 'hosts.equiv exists=' ~ (u27_equiv_stat.stat.exists | string) ~ ' / 발견된 .rhosts: ' ~ (u27_rhosts_found | join(', ') if u27_rhosts_found | length > 0 else '없음')
     }] }}"
 
-# U-28 | IP 기반 접근제어
-- name: "U-28 | firewalld 활성 상태 조회"
-  ansible.builtin.shell: "systemctl is-active firewalld 2>/dev/null || echo inactive"
-  args:
-    executable: /bin/bash
-  register: u28_firewalld_active
-  changed_when: false
-  failed_when: false
+# U-28 | IP 기반 접근제어 (SG 22번 인바운드 부재 + SSM Session Manager 대체 기준)
+- name: "U-28 | 대상 인스턴스 EC2 메타데이터 조회(instance-id)"
+  amazon.aws.ec2_metadata_facts:
+  ignore_errors: true
 
-- name: "U-28 | 활성 zone의 source 제한 조회"
-  ansible.builtin.shell: "set -o pipefail && firewall-cmd --list-all 2>/dev/null | grep -E '^\\s*sources:' | awk -F: '{print $2}'"
-  args:
-    executable: /bin/bash
-  register: u28_sources_raw
-  changed_when: false
+- name: "U-28 | 인스턴스에 연결된 보안그룹 ID 조회(mgmt 서버 AWS CLI)"
+  ansible.builtin.command:
+    cmd: "aws ec2 describe-instances --instance-ids {{ ansible_ec2_instance_id }} --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text"
+  register: u28_sg_ids_raw
+  delegate_to: localhost
   failed_when: false
-  when: (u28_firewalld_active.stdout | default('') | trim) == 'active'
+  when: ansible_ec2_instance_id | default('') | length > 0
+
+- name: "U-28 | 보안그룹 22번 포트 인바운드 룰 조회(mgmt 서버 AWS CLI)"
+  ansible.builtin.command:
+    cmd: >-
+      aws ec2 describe-security-groups
+      --group-ids {{ u28_sg_ids_raw.stdout.split() | join(' ') }}
+      --query "SecurityGroups[].IpPermissions[?FromPort<=\`22\` && ToPort>=\`22\`]"
+      --output json
+  register: u28_ssh_rules_raw
+  delegate_to: localhost
+  failed_when: false
+  when: u28_sg_ids_raw is defined and u28_sg_ids_raw.stdout | default('') | trim | length > 0
 
 - name: "U-28 | 판정 기록"
   vars:
-    u28_firewalld_is_active: "{{ (u28_firewalld_active.stdout | default('') | trim) == 'active' }}"
-    u28_has_source_restriction: "{{ (u28_sources_raw.stdout | default('') | trim | length) > 0 }}"
+    u28_lookup_ok: "{{ ansible_ec2_instance_id is defined and u28_sg_ids_raw is defined and u28_sg_ids_raw.rc | default(-1) == 0 and u28_ssh_rules_raw is defined and u28_ssh_rules_raw.rc | default(-1) == 0 }}"
+    u28_ssh_rules: "{{ (u28_ssh_rules_raw.stdout | default('[]') | from_json) if u28_lookup_ok else [] }}"
+    u28_ssh_open: "{{ (u28_ssh_rules | flatten | length) > 0 }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-28', 'item': 'IP 기반 접근제어',
       'status': (
-        'SKIP' if u28_allowed_ips is none else
-        ('FAIL' if (not u28_firewalld_is_active or not u28_has_source_restriction) else 'PASS')
+        'SKIP' if not u28_lookup_ok else
+        ('FAIL' if u28_ssh_open else 'PASS')
       ),
       'detail': (
-        'firewalld: ' ~ (u28_firewalld_active.stdout | trim) ~
-        (' / source 제한: ' ~ (u28_sources_raw.stdout | default('없음', true) | trim) if u28_firewalld_is_active else '') ~
-        (' — 허용IP목록(u28_allowed_ips) TODO' if u28_allowed_ips is none else '')
+        'SG(' ~ (u28_sg_ids_raw.stdout | default('') | trim) ~ ') 조회 실패 — instance-id 또는 AWS CLI 권한 확인 필요' if not u28_lookup_ok
+        else ('보안그룹(' ~ (u28_sg_ids_raw.stdout | trim) ~ ')에 22번 포트 인바운드 룰 존재: ' ~ (u28_ssh_rules | string | truncate(200)) if u28_ssh_open
+        else '보안그룹(' ~ (u28_sg_ids_raw.stdout | trim) ~ ')에 22번 포트 인바운드 룰 없음 — SSM Session Manager 대체 확인(보완통제 인정, 트래킹표 11번)')
       )
     }] }}"
 
@@ -339,7 +363,7 @@
       'detail': u30_raw.stdout | default('UMASK 명시 설정 없음(시스템 기본값 022로 간주)', true)
     }] }}"
 
-# U-31 | 숨김 디렉터리 점검
+# U-31 | 숨김 디렉터리 점검 (N/A 확정 — OS/도구 표준 항목 외 발견 시 FAIL)
 - name: "U-31 | 사용자 홈 숨김 디렉터리 조회"
   ansible.builtin.shell: "set -o pipefail && for h in $(awk -F: '$3>=1000 {print $6}' /etc/passwd); do find \"$h\" -maxdepth 1 -type d -name '.*' 2>/dev/null | grep -vE '(^\\.$|/\\.\\.?$)'; done"
   args:
@@ -362,7 +386,7 @@
       )
     }] }}"
 
-# U-33 | 불필요한 파일 제거
+# U-33 | 불필요한 파일 제거 (N/A 확정 — 업무 파일 배치 경로 발견 시 FAIL)
 - name: "U-33 | 업무 파일 배치 경로 조회"
   ansible.builtin.shell: >
     set -o pipefail &&
@@ -381,7 +405,7 @@
       'id': 'U-33', 'item': '불필요한 파일 제거',
       'status': 'FAIL' if (u33_raw.stdout | default('') | length > 0) else 'N/A',
       'detail': (
-        '업무 파일 배치 경로(' ~ (u33_business_file_dirs | join(', ')) ~ ')에서 파일 발견: ' ~ (u33_raw.stdout | truncate(200)) if (u33_raw.stdout | default('') | length > 0)
+        '업무 파일 배치 경로(' ~ (u33_business_file_dirs | join(', ')) ~ ')에서 파일 발견: ' ~ u33_raw.stdout if (u33_raw.stdout | default('') | length > 0)
         else '업무 파일 배치 경로 전부 비어있음 — 컨테이너 기반 인프라 특성상 정상(N/A)'
       )
     }] }}"

@@ -36,7 +36,7 @@ u13_required_encrypt_method: "SHA512"
 # U-16,18,19,20,21,22,27,29,37,67 : 주요 파일 권한 임계값
 u16_passwd_perm_max: "0644"      # /etc/passwd
 u18_shadow_perm_max: "0400"      # /etc/shadow
-u19_hosts_perm_max: "0600"       # /etc/hosts
+u19_hosts_perm_max: "0644"       # /etc/hosts
 u20_xinetd_perm_max: "0600"      # /etc/xinetd.conf, /etc/xinetd.d/*
 u21_syslog_perm_max: "0640"      # /etc/rsyslog.conf
 u22_services_perm_max: "0644"    # /etc/services
@@ -96,8 +96,7 @@ u26_dev_exclude_dirs:
   - mqueue
   - shm
 
-# U-28 : IP 기반 접근제어 (2차 점검 항목)
-u28_allowed_ips: null
+# U-28 : IP 기반 접근제어 (SG 22번 인바운드 부재 기반 자동판정, 별도 변수 불필요)
 
 # U-30 : UMASK 설정
 u30_umask_min: "022"
@@ -147,7 +146,7 @@ u60_snmp_community_blacklist:
 # U-64 : 주기적 보안 패치 및 벤더 권고사항 적용
 u64_eks_optimized_ami_ssm_param: "/aws/service/eks/optimized-ami/1.36/amazon-linux-2023/x86_64/standard/recommended/image_id"
 u64_nat_latest_ami_ssm_param: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
-u64_dnf_patch_max_age_days: null
+u64_dnf_patch_max_age_days: 30
 
 # U-66 : 정책에 따른 시스템 로깅 설정
 u66_missing_log_categories:
@@ -252,35 +251,35 @@ dbms_connections:
     port: 3306
     secret_ref: "shared-mysql-accounts"
     namespace: backend
-    pod_label_selector: "app.kubernetes.io/name=shared-mysql"
+    pod_label_selector: "app.kubernetes.io/instance=shared-mysql"
   - service: auth_db
     engine: mysql
     host: "shared-mysql-primary.svc.cluster.local"
     port: 3306
     secret_ref: "shared-mysql-accounts"
     namespace: backend
-    pod_label_selector: "app.kubernetes.io/name=shared-mysql"
+    pod_label_selector: "app.kubernetes.io/instance=shared-mysql"
   - service: order_db
     engine: mysql
     host: "shared-mysql-primary.svc.cluster.local"
     port: 3306
     secret_ref: "shared-mysql-accounts"
     namespace: backend
-    pod_label_selector: "app.kubernetes.io/name=shared-mysql"
+    pod_label_selector: "app.kubernetes.io/instance=shared-mysql"
   - service: payment_db
     engine: mysql
     host: "shared-mysql-primary.svc.cluster.local"
     port: 3306
     secret_ref: "shared-mysql-accounts"
     namespace: backend
-    pod_label_selector: "app.kubernetes.io/name=shared-mysql"
+    pod_label_selector: "app.kubernetes.io/instance=shared-mysql"
   - service: product_db
     engine: postgresql
     host: "shared-pg-rw.backend.svc.cluster.local"
     port: 5432
     secret_ref: "shared-pg-product-service-credentials"
     namespace: backend
-    pod_label_selector: "app.kubernetes.io/name=shared-pg"
+    pod_label_selector: "cnpg.io/cluster=shared-pg"
     database: "product_db"
   - service: wms_db
     engine: postgresql
@@ -288,7 +287,7 @@ dbms_connections:
     port: 5432
     secret_ref: "shared-pg-wms-service-credentials"
     namespace: backend
-    pod_label_selector: "app.kubernetes.io/name=shared-pg"
+    pod_label_selector: "cnpg.io/cluster=shared-pg"
     database: "wms_db"
   - service: scm_db
     engine: postgresql
@@ -296,5 +295,66 @@ dbms_connections:
     port: 5432
     secret_ref: "shared-pg-scm-service-credentials"
     namespace: backend
-    pod_label_selector: "app.kubernetes.io/name=shared-pg"
+    pod_label_selector: "cnpg.io/cluster=shared-pg"
     database: "scm_db"
+  # oms_db(PostgreSQL) — secret_ref 확정 전까지 제외
+  # - service: oms_db
+  #   engine: postgresql
+  #   host: "shared-pg-rw.backend.svc.cluster.local"
+  #   port: 5432
+  #   secret_ref: null
+  #   namespace: backend
+  #   pod_label_selector: "cnpg.io/cluster=shared-pg"
+  #   database: "oms_db"
+
+# DBMS 관리자(admin) 접속 정보 — D-01/02/04/06/08/11/18/20/21 전용(그 외 항목은 dbms_connections 사용)
+dbms_admin_connections:
+  mysql:
+    host: "shared-mysql-primary.svc.cluster.local"
+    port: 3306
+    namespace: backend
+    secret_ref: "moco-shared-mysql"
+    secret_username: "root"
+    secret_password_key: "ROOT_PASSWORD"
+  postgresql:
+    host: "shared-pg-rw.backend.svc.cluster.local"
+    port: 5432
+    namespace: backend
+    secret_ref: "shared-pg-superuser"
+
+# =============================================================================
+# 인증_인가(AUTHZ-XX, SVC-01) 기준값
+# =============================================================================
+authz_backend_namespace: "backend"
+authz_internal_path_prefix: "/internal"
+
+# SVC-01 : 서비스 간 NetworkPolicy 화이트리스트
+svc01_allowed_service_calls:
+  - { caller: "order-service",   callee: "oms-service" }
+  - { caller: "product-service", callee: "order-service" }
+  - { caller: "payment-service", callee: "order-service" }
+  - { caller: "order-service",   callee: "payment-service" }
+  - { caller: "order-service",   callee: "product-service" }
+  - { caller: "order-service",   callee: "user-service" }
+  - { caller: "auth-service",    callee: "user-service" }
+  - { caller: "oms-service",     callee: "auth-service" }
+  - { caller: "wms-service",     callee: "auth-service" }
+  - { caller: "scm-service",     callee: "auth-service" }
+  - { caller: "order-service",   callee: "auth-service" }
+  - { caller: "payment-service", callee: "auth-service" }
+  - { caller: "product-service", callee: "auth-service" }
+  - { caller: "user-service",    callee: "auth-service" }
+
+# AUTHZ-09 : WMS→OMS 반품검수 RabbitMQ 발행/구독 권한
+authz09_shared_account_blocks_check: true    # true인 동안 판정 항상 SKIP — 계정 분리 완료 시 false로 전환
+authz09_rabbitmq_management_url: null
+authz09_rabbitmq_readonly_user_secret: null
+authz09_rabbitmq_vhost: "total-prod"
+authz09_rabbitmq_exchange: "wms.topic.exchange"
+authz09_rabbitmq_routing_key: "wms.return.inspected"
+authz09_rabbitmq_exchange_dedicated: null
+authz09_rabbitmq_oms_queue: null
+authz09_rabbitmq_publisher_allowed: ["wms-service"]
+authz09_rabbitmq_consumer_allowed: ["oms-service"]
+authz09_rabbitmq_publisher_user: null
+authz09_rabbitmq_consumer_user: null

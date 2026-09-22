@@ -123,6 +123,7 @@ def check_1_5_keypair_access(ec2):
 
 
 def check_1_6_keypair_storage(ec2):
+    # EC2 Key Pair 자체 미사용(SSM 접속) — 보관 위치 점검 대상 자체가 없는 게 정상(N/A)
     reservations, err = safe_call(ec2.describe_instances)
     if err:
         return [make_result("1.6", "Key Pair 보관 관리", "SKIP", f"EC2 인스턴스 조회 실패: {err}")]
@@ -210,13 +211,7 @@ def check_1_10_password_policy(iam):
     return [make_result("1.10", "AWS 계정 패스워드 정책 관리", status, str(p))]
 
 
-def check_2_3_service_policies():
-    if config.SERVICE_IAM_POLICY_MAP is not None:
-        status, detail = "REVIEW", "서비스별 IAM 정책 매핑 존재 — 실제 IAM 정책과 대조 필요"
-    else:
-        status = "SKIP"
-        detail = "서비스 역할별 필요권한 정의서(config.SERVICE_IAM_POLICY_MAP) 미확정"
-    return [make_result("2.3", "기타 서비스 정책 관리", status, detail)]
+# 2.3(기타 서비스 KMS/S3/SecretManager)은 2.1/2.2와 함께 eks_checks.py에 구현됨(K8s API 필요)
 
 
 def run_all(iam, ec2, configservice):
@@ -231,5 +226,4 @@ def run_all(iam, ec2, configservice):
     results += check_1_8_access_key_lifecycle(configservice)
     results += check_1_9_mfa(iam)
     results += check_1_10_password_policy(iam)
-    results += check_2_3_service_policies()
     return results

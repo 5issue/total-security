@@ -7,7 +7,8 @@
 입력: site_check.yml 이 ./results/ 에 저장한
     - {inventory_hostname}_{날짜}.json  (서버, 'host' 키 존재)
     - dbms_{날짜}.json                   (DBMS, 'host' 키 없음)
-출력: server_dbms_result.xlsx (시트: 서버, DBMS)
+    - auth_authz_{날짜}.json             (인증_인가 중 K8s 기반 AUTHZ-08/09, SVC-01)
+출력: server_dbms_result.xlsx (시트: 서버, DBMS, 인증_인가)
 """
 import argparse
 import json
@@ -57,16 +58,18 @@ def parse_args():
 def load_result_files(results_dir: Path):
     if not results_dir.is_dir():
         print(f"[경고] 결과 디렉터리가 없습니다: {results_dir}", file=sys.stderr)
-        return [], []
-    server_files, dbms_files = [], []
+        return [], [], []
+    server_files, dbms_files, auth_files = [], [], []
     for f in sorted(results_dir.glob("*.json")):
         with f.open(encoding="utf-8") as fh:
             data = json.load(fh)
         if "host" in data:
             server_files.append((f, data))
+        elif f.stem.startswith("auth_authz_"):
+            auth_files.append((f, data))
         else:
             dbms_files.append((f, data))
-    return server_files, dbms_files
+    return server_files, dbms_files, auth_files
 
 
 def build_server_rows(server_files, round_filter):
@@ -138,27 +141,30 @@ def write_sheet(wb, title, rows):
 def main():
     args = parse_args()
     results_dir = Path(args.results_dir)
-    server_files, dbms_files = load_result_files(results_dir)
+    server_files, dbms_files, auth_files = load_result_files(results_dir)
 
     now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
     round_label = args.round_ or "정기점검"
 
     server_rows = build_server_rows(server_files, args.round_)
     dbms_rows = build_dbms_rows(dbms_files, args.round_)
+    auth_rows = build_dbms_rows(auth_files, args.round_)  # auth_authz_*.json도 dbms와 동일한 구조(호스트 구분 없음)
     append_excluded_rows(server_rows, EXCLUDED_SERVER_ITEMS, round_label, now_iso)
     append_excluded_rows(dbms_rows, EXCLUDED_DBMS_ITEMS, round_label, now_iso)
     sort_rows(server_rows)
     sort_rows(dbms_rows)
+    sort_rows(auth_rows)
 
     wb = Workbook()
     wb.remove(wb.active)
     write_sheet(wb, "서버", server_rows)
     write_sheet(wb, "DBMS", dbms_rows)
+    write_sheet(wb, "인증_인가", auth_rows)
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
-    print(f"[완료] {out_path} 생성 — 서버 {len(server_rows)}행, DBMS {len(dbms_rows)}행")
+    print(f"[완료] {out_path} 생성 — 서버 {len(server_rows)}행, DBMS {len(dbms_rows)}행, 인증_인가 {len(auth_rows)}행")
 
 
 if __name__ == "__main__":

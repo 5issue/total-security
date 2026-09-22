@@ -22,6 +22,7 @@ def check_3_1_sg_any(ec2):
 
 
 def check_3_2_sg_unnecessary_rules(ec2):
+    # 인바운드는 VPC 내부 대역(SG_ALLOWED_INBOUND_CIDR)만 허용, 외부 인터넷 인바운드는 차단
     sgs, err = safe_call(ec2.describe_security_groups)
     if err:
         return [make_result("3.2", "보안 그룹 인/아웃바운드 불필요 정책 관리", "SKIP", f"보안그룹 조회 실패: {err}")]
@@ -108,6 +109,7 @@ def check_3_5_igw_direct_route(ec2):
 
 
 def check_3_6_nat_management(ec2):
+    # NAT 경유지·퍼블릭 서브넷·프라이빗 서브넷 대역: config.NAT_PURPOSE_CONFIRMED_RESOURCES
     reservations, err = safe_call(ec2.describe_instances)
     if err:
         return [make_result("3.6", "NAT 게이트웨이 연결 관리", "SKIP", f"EC2 인스턴스 조회 실패: {err}")]
