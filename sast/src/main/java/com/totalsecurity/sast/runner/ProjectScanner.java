@@ -3,6 +3,8 @@ package com.totalsecurity.sast.runner;
 import com.totalsecurity.sast.detector.deserialization.InsecureDeserializationDetector;
 import com.totalsecurity.sast.detector.authn.Authn11AnalysisResult;
 import com.totalsecurity.sast.detector.authn.Authn11PlaintextRefreshTokenStorageDetector;
+import com.totalsecurity.sast.detector.authn.Svc05AnalysisResult;
+import com.totalsecurity.sast.detector.authn.Svc05RawAuthTokenBrokerMessageDetector;
 import com.totalsecurity.sast.detector.redirect.OpenRedirectDetector;
 import com.totalsecurity.sast.detector.upload.UnrestrictedFileUploadDetector;
 import com.totalsecurity.sast.detector.xss.XssDetector;
@@ -144,6 +146,25 @@ public final class ProjectScanner {
                         null,
                         ProjectScanStage.ANALYSIS,
                         "AUTHN-11 analysis failed: " + safeMessage(exception),
+                        false));
+            }
+            try {
+                Svc05AnalysisResult svc05 =
+                        new Svc05RawAuthTokenBrokerMessageDetector()
+                                .analyze(extractedFiles, lombokNaming);
+                findings.addAll(svc05.findings());
+                svc05.unsupported().forEach(item -> diagnostics.add(diagnostic(
+                        projectRoot,
+                        item.location().file(),
+                        ProjectScanStage.ANALYSIS,
+                        "SVC-05 unsupported: " + item.reason(),
+                        false)));
+            } catch (RuntimeException exception) {
+                diagnostics.add(diagnostic(
+                        projectRoot,
+                        null,
+                        ProjectScanStage.ANALYSIS,
+                        "SVC-05 analysis failed: " + safeMessage(exception),
                         false));
             }
         }

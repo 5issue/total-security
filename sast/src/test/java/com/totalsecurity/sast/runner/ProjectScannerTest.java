@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.totalsecurity.sast.detector.redirect.OpenRedirectDetector;
 import com.totalsecurity.sast.detector.authn.Authn11PlaintextRefreshTokenStorageDetector;
+import com.totalsecurity.sast.detector.authn.Svc05RawAuthTokenBrokerMessageDetector;
 import com.totalsecurity.sast.detector.sql.SqlInjectionDetector;
 import com.totalsecurity.sast.detector.xss.XssDetector;
 import com.totalsecurity.sast.interprocedural.UnsupportedInterproceduralReason;
@@ -22,6 +23,30 @@ import org.junit.jupiter.api.io.TempDir;
 class ProjectScannerTest {
     @TempDir
     Path temporaryDirectory;
+
+    @Test
+    void runsSvc05PolicyAnalysisThroughDefaultProjectScan() throws Exception {
+        Path project = project("svc-05-project");
+        java(project, "src/main/java/example/BrokerPublisher.java", """
+                package example;
+                import org.springframework.amqp.rabbit.core.RabbitTemplate;
+                class BrokerPublisher {
+                    RabbitTemplate rabbitTemplate;
+                    void publish(String accessToken) {
+                        rabbitTemplate.convertAndSend("exchange", "auth.issued", accessToken);
+                    }
+                }
+                """);
+
+        ProjectScanResult result = scan(project);
+
+        var findings = result.findings().stream()
+                .filter(finding -> finding.ruleId().equals(
+                        Svc05RawAuthTokenBrokerMessageDetector.RULE_ID))
+                .toList();
+        assertEquals(1, findings.size());
+        assertTrue(findings.getFirst().cweReference().isEmpty());
+    }
 
     @Test
     void runsAuthn11PolicyAnalysisThroughDefaultProjectScan() throws Exception {

@@ -209,6 +209,7 @@ public final class TaintSinkFindingFactory {
             case HTTP_RESPONSE_BODY -> "HTTP response body";
             case FILE_UPLOAD_TARGET -> "File upload destination";
             case REFRESH_TOKEN_PERSISTENCE -> "Refresh-token persistence payload";
+            case ASYNC_MESSAGE_PUBLISH -> "Asynchronous message payload";
         };
         return subject + " argument " + argumentIndex + " of " + sink.call().call().methodName();
     }

@@ -15,7 +15,7 @@ Java source
 
 Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java 의미 추출기는 syntax tree에서 class, method, parameter, variable, assignment, method invocation, return, annotation 및 statement 구조를 추출해 자체 IR로 변환한다. CFG, DataFlow, Taint, rule 및 Finding 계층은 `TSNode`, `TSTree`, `org.treesitter` 타입이나 Tree-sitter node type 문자열에 직접 의존하지 않는다.
 
-현재 구현은 STEP 1~24와 STEP 26A/26B/26C, STEP 27/27B, STEP 28 및 STEP 29A의 범위다.
+현재 구현은 STEP 1~24와 STEP 26A/26B/26C, STEP 27/27B, STEP 28 및 STEP 29A/29B/29C의 범위다.
 
 - STEP 1: Tree-sitter Java parsing 및 syntax tree 순회
 - STEP 2/2B: Java 의미 추출, Expression IR, lexical/structural 순서를 보존하는 ordered Statement IR
@@ -37,6 +37,8 @@ Tree-sitter는 parsing과 concrete syntax tree 생성에만 사용한다. Java �
 - STEP 27/27B: exact project-local direct member record/enum extraction, source canonical indexing 및 enclosing member shadowing precedence 보강
 - STEP 28: 독립된 controlled fixture와 manifest를 이용한 ground-truth vulnerability benchmark
 - STEP 29A: AUTHN-06 source hardcoded signing private key/secret 보수적 검사
+- STEP 29B: AUTHN-11 source-proven raw refresh token의 persistent JPA storage 보수적 검사
+- STEP 29C: SVC-05 source-proven raw authentication token의 RabbitMQ message payload 전달 보수적 검사
 
 이 엔진은 finding이 0개라는 사실을 대상이 안전하다는 증명으로 해석하지 않는다. parse/semantic failure와 지원하지 않는 호출 또는 구문은 별도로 보존하며, 지원 범위 밖의 의미를 추측해 성공한 분석으로 표시하지 않는다.
 
@@ -407,6 +409,15 @@ Pattern Analysis는 DataFlow/Taint vulnerability detector와 분리되어 있다
 - 현재 persistent payload 증명은 exact record component, constructor의 단일 `this.field = parameter` assignment, local reaching definition과 argument 없는 exact `lombok.Builder` constructor mapping으로 제한된다. 이름만 같은 manual builder는 지원하지 않으며 static, Java `transient`, exact `jakarta.persistence.Transient` field는 persistence payload에서 제외한다. 지원하지 않는 builder/constructor, heap mutation, alias 또는 interprocedural shape는 안전 판정이 아니라 explicit unsupported/unknown이다.
 - 분석 결과는 source code의 supported path만 설명하며 실제 DB/runtime contents 전체나 운영환경 준수를 증명하지 않는다.
 - token literal/runtime value는 evidence에 포함하지 않는다. 제공된 체크리스트에 CWE가 없어 임의 CWE를 부여하지 않고 checklist identity `AUTHN-11`을 보존한다.
+
+## SVC-05 broker message의 raw authentication token
+
+`SVC_05_RAW_AUTH_TOKEN_BROKER_MESSAGE`는 supported source flow에서 증명된 raw access token, refresh token, JWT 또는 bearer/Authorization token이 exact Spring AMQP `RabbitTemplate.convertAndSend` message payload로 전달되는 경우를 검사한다. 모든 `token` 이름을 인증 token source로 보거나 모든 `send`/`publish` 이름을 broker sink로 보지 않으며, `ApplicationEventPublisher` 같은 in-process event 호출도 broker sink로 간주하지 않는다.
+
+- alias/assignment와 지원되는 String 변환, bytes/Base64/URL/hex/String 변환 및 JSON serialization 같은 reversible transformation은 raw credential 의미를 제거하지 않는다. source에서 증명된 exact cryptographic hash output은 raw token으로 계속 전파하지 않는다.
+- payload mapping은 direct value, exact project record, constructor의 증명된 `this.field = parameter` assignment, argument 없는 exact `lombok.Builder` constructor mapping 및 exact `ObjectMapper.writeValueAsString` wrapper로 제한된다. manual/name-only builder, 불완전한 constructor mapping, 알 수 없는 object/heap/alias/interprocedural shape는 안전 판정이 아니라 explicit unsupported/unknown이다.
+- finding은 source, broker sink와 provenance를 보존하지만 실제 token value는 evidence, flow text, 문자열 표현과 diagnostic에 포함하지 않는다. 제공된 체크리스트에 CWE가 없어 임의 CWE를 부여하지 않고 checklist identity `SVC-05`를 보존한다.
+- 이 검사는 지원되는 source 및 정적 payload flow만 설명한다. finding이 없다는 사실은 실제 운영 broker, 모든 message schema 또는 SVC-05 운영 준수 전체가 안전하다는 증명이 아니다.
 
 ## 명시적 제한
 
