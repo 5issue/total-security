@@ -2,7 +2,8 @@
 
 
 def make_result(item_id: str, item: str, status: str, detail: str) -> dict:
-    """판정 결과 dict 생성. target(대상)은 클라우드 항목 전체가 '계정 전체'로 고정."""
+    """스펙 4.3절 컬럼 스키마 중 판정 로직에서 채우는 필드만 dict로 반환한다.
+    대상(target)은 클라우드 항목 전체가 '계정 전체'로 고정(스펙 4.3 예시 근거)."""
     return {"id": item_id, "item": item, "status": status, "detail": detail, "target": "계정 전체"}
 
 

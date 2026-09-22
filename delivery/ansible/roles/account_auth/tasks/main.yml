@@ -1,5 +1,5 @@
 ---
-# roles/account_auth — 서버 계정·인증 점검
+# roles/account_auth — 서버 A-1(계정·인증) 점검
 
 # U-01 | root 계정 원격 접속 차단
 - name: "U-01 | sshd_config PermitRootLogin 조회"
@@ -107,7 +107,7 @@
       'detail': u06_raw.stdout | default('pam_wheel 설정 없음', true)
     }] }}"
 
-# U-07 | 불필요한 계정 제거
+# U-07 | 불필요한 계정 제거 [확정 기준값: group_vars/all.yml]
 #   ① 블랙리스트 계정 존재 + 로그인 가능 상태 → FAIL
 #   ② 사람 계정 중 90일 이상 미로그인 → FAIL (last 명령어 기반, 참고용 보고)
 - name: "U-07 | 블랙리스트 계정별 상태 조회"

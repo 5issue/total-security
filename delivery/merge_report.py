@@ -4,8 +4,8 @@
 실행 예시:
     python3 merge_report.py --round "1차" --date 20260914
 
-시트 4개(요약/서버/DBMS/클라우드)로 구성한 최종 결과물을 만든다. 이 파일이 SHA-256
-해시와 함께 보안팀에 전달되는 결과물이다.
+시트 5개(요약/서버/DBMS/클라우드/인증_인가)로 구성한 최종 결과물을 만든다.
+이 파일이 SHA-256 해시와 함께 보안팀에 전달되는 결과물이다.
 """
 import argparse
 from datetime import datetime
@@ -80,7 +80,7 @@ def write_data_sheet(wb, title, rows):
     return ws
 
 
-def write_summary_sheet(wb, round_, checked_at, all_rows):
+def write_summary_sheet(wb, round_, checked_at, all_rows, category_rows):
     ws = wb.create_sheet(title="요약")
     ws.append(["구분", "값"])
     ws["A1"].font = ws["B1"].font = Font(bold=True)
@@ -100,15 +100,32 @@ def write_summary_sheet(wb, round_, checked_at, all_rows):
         if label in STATUS_FILL:
             ws.cell(row=ws.max_row, column=1).fill = STATUS_FILL[label]
             ws.cell(row=ws.max_row, column=2).fill = STATUS_FILL[label]
+
+    # 파트(서버/DBMS/클라우드/인증_인가)별 PASS/FAIL/N/A/SKIP/REVIEW 현황
+    ws.append([])
+    ws.append(["파트별 현황"])
+    ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+    header_row = ws.max_row + 1
+    ws.append(["구분"] + STATUSES + ["합계"])
+    for cell in ws[header_row]:
+        cell.font = Font(bold=True)
+    for label, rows in category_rows:
+        part_counts = {s: sum(1 for r in rows if r[2] == s) for s in STATUSES}
+        ws.append([label] + [part_counts[s] for s in STATUSES] + [len(rows)])
+        for col_idx, s in enumerate(STATUSES, start=2):
+            if part_counts[s] > 0:
+                ws.cell(row=ws.max_row, column=col_idx).fill = STATUS_FILL[s]
+
     if counts["SKIP"] > 0:
         ws.append([])
         note = ws.cell(row=ws.max_row + 1, column=1,
                         value=f"⚠ SKIP {counts['SKIP']}건 — 기준값 미확정으로 판정 불가한 항목입니다. "
                               "group_vars/all.yml, cloud/config.py 값 확정 후 재점검 필요.")
         note.font = Font(color="C00000", bold=True)
-        ws.merge_cells(start_row=note.row, start_column=1, end_row=note.row, end_column=2)
+        ws.merge_cells(start_row=note.row, start_column=1, end_row=note.row, end_column=7)
     ws.column_dimensions["A"].width = 16
-    ws.column_dimensions["B"].width = 60
+    for col in "BCDEFG":
+        ws.column_dimensions[col].width = 14
     for row in ws.iter_rows():
         for cell in row:
             cell.alignment = Alignment(vertical="center", wrap_text=True)
@@ -120,7 +137,16 @@ def main():
     server_rows = read_sheet_rows(Path(args.server_dbms), "서버")
     dbms_rows = read_sheet_rows(Path(args.server_dbms), "DBMS")
     cloud_rows = read_sheet_rows(Path(args.cloud), "클라우드")
-    all_rows = server_rows + dbms_rows + cloud_rows
+    # 인증_인가는 K8s 기반(AUTHZ-08/09, SVC-01 — server_dbms_result.xlsx)과
+    # AWS 기반(SVC-02/AUTHN-14/SVC-08 — cloud_result.xlsx) 두 소스를 합쳐 한 시트로 만든다.
+    auth_rows = read_sheet_rows(Path(args.server_dbms), "인증_인가") + read_sheet_rows(Path(args.cloud), "인증_인가")
+    all_rows = server_rows + dbms_rows + cloud_rows + auth_rows
+    category_rows = [
+        ("서버", server_rows),
+        ("DBMS", dbms_rows),
+        ("클라우드", cloud_rows),
+        ("인증_인가", auth_rows),
+    ]
 
     if not all_rows:
         raise SystemExit("병합할 데이터가 없습니다 — server_dbms_result.xlsx / cloud_result.xlsx 경로를 확인하세요.")
@@ -129,16 +155,17 @@ def main():
 
     wb = Workbook()
     wb.remove(wb.active)
-    write_summary_sheet(wb, args.round_, checked_at, all_rows)
+    write_summary_sheet(wb, args.round_, checked_at, all_rows, category_rows)
     write_data_sheet(wb, "서버", server_rows)
     write_data_sheet(wb, "DBMS", dbms_rows)
     write_data_sheet(wb, "클라우드", cloud_rows)
+    write_data_sheet(wb, "인증_인가", auth_rows)
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
     print(f"[완료] {out_path} 생성 — 총 {len(all_rows)}건 "
-          f"(서버 {len(server_rows)} / DBMS {len(dbms_rows)} / 클라우드 {len(cloud_rows)})")
+          f"(서버 {len(server_rows)} / DBMS {len(dbms_rows)} / 클라우드 {len(cloud_rows)} / 인증_인가 {len(auth_rows)})")
     print("[다음 단계] mgmt 서버에서 SHA-256 해시 계산 필요: "
           f"sha256sum {out_path.name} > {out_path.name}.sha256")
 

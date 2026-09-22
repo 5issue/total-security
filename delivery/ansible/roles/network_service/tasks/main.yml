@@ -1,5 +1,5 @@
 ---
-# roles/network_service — 서버 불필요 서비스·네트워크 서비스 점검
+# roles/network_service — 서버 U-34~U-61 계열(불필요 서비스·네트워크 서비스) 점검
 
 # U-34 | Finger 서비스 비활성화
 - name: "U-34 | finger 서비스 상태 조회"
@@ -132,7 +132,7 @@
       'detail': 'nfs-server: ' ~ (u39_raw.stdout | trim)
     }] }}"
 
-# U-40 | NFS 접근 통제
+# U-40 | NFS 접근 통제 [기준값필요: u40_nfs_allowed_hosts, NFS 비활성 시 N/A]
 - name: "U-40 | /etc/exports 조회"
   ansible.builtin.command: cat /etc/exports
   register: u40_exports_raw
@@ -185,7 +185,7 @@
       'detail': 'autofs: ' ~ (u41_raw.stdout | trim)
     }] }}"
 
-# U-42 | 불필요한 RPC 서비스 비활성화
+# U-42 | 불필요한 RPC 서비스 비활성화 [확정 기준값: group_vars/all.yml]
 - name: "U-42 | RPC 서비스별 상태 조회"
   ansible.builtin.shell: "systemctl is-active {{ item }} 2>/dev/null || echo inactive"
   args:
@@ -239,7 +239,7 @@
       'detail': 'tftp/talk/ntalk 활성 유닛 수: ' ~ (u44_raw.stdout | default('0') | trim)
     }] }}"
 
-# U-45 | 메일 서비스 버전 점검
+# U-45 | 메일 서비스 버전 점검 [기준값필요: u45_mail_latest_version, 미사용시 N/A]
 - name: "U-45 | 메일 서비스 상태 조회"
   ansible.builtin.shell: "systemctl is-active postfix.service sendmail.service 2>/dev/null | grep -c '^active' || true"
   args:
@@ -283,7 +283,7 @@
       )
     }] }}"
 
-# U-47 | 스팸 메일 릴레이 제한
+# U-47 | 스팸 메일 릴레이 제한 [기준값필요: u47_relay_allowed_list, 미사용시 N/A]
 - name: "U-47 | mynetworks 설정 조회"
   ansible.builtin.command: postconf mynetworks
   register: u47_raw
@@ -329,7 +329,7 @@
       )
     }] }}"
 
-# U-49 | DNS 보안 버전 패치
+# U-49 | DNS 보안 버전 패치 [기준값필요: u49_dns_patch_baseline, 미사용시 N/A]
 - name: "U-49 | named(bind) 상태 조회"
   ansible.builtin.shell: "systemctl is-active named.service 2>/dev/null | grep -c '^active' || true"
   args:
@@ -361,7 +361,7 @@
       )
     }] }}"
 
-# U-50 | DNS Zone Transfer 설정
+# U-50 | DNS Zone Transfer 설정 [기준값필요: u50_dns_allowed_secondaries, 미사용시 N/A]
 - name: "U-50 | allow-transfer 설정 조회"
   ansible.builtin.shell: "grep -A2 'allow-transfer' /etc/named.conf 2>/dev/null"
   args:
@@ -388,7 +388,7 @@
       )
     }] }}"
 
-# U-51 | DNS 서비스의 취약한 동적 업데이트 설정 금지
+# U-51 | DNS 서비스의 취약한 동적 업데이트 설정 금지 [기준값필요: u51_dns_dynamic_update_allowed]
 - name: "U-51 | allow-update 설정 조회"
   ansible.builtin.shell: "grep -A2 'allow-update' /etc/named.conf 2>/dev/null"
   args:
@@ -509,7 +509,7 @@
       'detail': 'ftp 계정 없음(해당없음)' if u55_raw.rc != 0 else u55_raw.stdout
     }] }}"
 
-# U-56 | FTP 서비스 접근 제어 설정
+# U-56 | FTP 서비스 접근 제어 설정 [기준값필요: u56_ftp_allowed_hosts, 미사용시 N/A]
 - name: "U-56 | tcp_wrappers vsftpd 설정 조회"
   ansible.builtin.shell: "grep -h vsftpd /etc/hosts.allow /etc/hosts.deny 2>/dev/null"
   args:
@@ -622,7 +622,7 @@
       )
     }] }}"
 
-# U-61 | SNMP Access Control 설정
+# U-61 | SNMP Access Control 설정 [기준값필요: u61_snmp_allowed_hosts, 미사용시 N/A]
 - name: "U-61 | snmpd.conf com2sec 설정 조회"
   ansible.builtin.shell: "grep -Ei '^\\s*com2sec\\b' /etc/snmp/snmpd.conf 2>/dev/null"
   args:
@@ -649,7 +649,7 @@
       )
     }] }}"
 
-# U-65 | NTP 및 시각 동기화 설정
+# U-65 | NTP 및 시각 동기화 설정 (Amazon Time Sync — `chronyc -n sources`로 조회)
 - name: "U-65 | chrony 활성 소스 조회(chronyc)"
   ansible.builtin.shell: "set -o pipefail && chronyc -n sources 2>/dev/null | tail -n +3 | awk '{print $2}'"
   args:

@@ -1,0 +1,216 @@
+---
+# roles/auth_authz — 인증_인가(AUTHZ-XX, SVC-01) K8s 기반 점검
+
+# AUTHZ-08 | /internal/* 공개 엣지 미노출 + NetworkPolicy
+- name: "AUTHZ-08 | Ingress 전체 조회"
+  kubernetes.core.k8s_info:
+    kind: Ingress
+    namespace: "{{ authz_backend_namespace }}"
+  register: authz08_ingress_raw
+  failed_when: false
+
+- name: "AUTHZ-09까지 공용 | NetworkPolicy 전체 조회"
+  kubernetes.core.k8s_info:
+    kind: NetworkPolicy
+    namespace: "{{ authz_backend_namespace }}"
+  register: authz_netpol_raw
+  failed_when: false
+
+- name: "AUTHZ-08 | /internal 경로 노출 여부 확인"
+  vars:
+    authz08_all_paths: "{{ authz08_ingress_raw.resources | default([])
+      | map(attribute='spec.rules') | select('defined') | list | sum(start=[])
+      | map(attribute='http.paths') | select('defined') | list | sum(start=[])
+      | map(attribute='path') | select('defined') | list }}"
+  ansible.builtin.set_fact:
+    authz08_exposed_paths: "{{ authz08_all_paths | select('match', '^' ~ authz_internal_path_prefix) | list }}"
+
+- name: "AUTHZ-08 | ipBlock 0.0.0.0/0 허용 NetworkPolicy 판별"
+  ansible.builtin.set_fact:
+    authz08_open_np: "{{ (authz08_open_np | default([])) + [item.metadata.name] }}"
+  loop: "{{ authz_netpol_raw.resources | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name | default('?') }}"
+  vars:
+    authz08_ipblocks: "{{ item.spec.ingress | default([])
+      | map(attribute='from') | select('defined') | list | sum(start=[])
+      | map(attribute='ipBlock.cidr') | select('defined') | list }}"
+  when: "'0.0.0.0/0' in authz08_ipblocks"
+
+- name: "AUTHZ-08 | 판정 기록"
+  vars:
+    authz08_query_ok: "{{ authz08_ingress_raw.resources is defined and authz_netpol_raw.resources is defined }}"
+    authz08_exposed: "{{ authz08_exposed_paths | default([]) }}"
+    authz08_open: "{{ authz08_open_np | default([]) }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'AUTHZ-08', 'item': '/internal/* 공개 엣지 미노출 + NetworkPolicy', 'target': authz_backend_namespace,
+      'status': ('SKIP' if not authz08_query_ok else ('FAIL' if (authz08_exposed | length > 0 or authz08_open | length > 0) else 'PASS')),
+      'detail': ('Ingress/NetworkPolicy 조회 실패' if not authz08_query_ok else
+        ('공개 노출된 /internal 경로: ' ~ (authz08_exposed | join(', ') if authz08_exposed | length > 0 else '없음')
+         ~ ' / 0.0.0.0/0 허용 NetworkPolicy: ' ~ (authz08_open | join(', ') if authz08_open | length > 0 else '없음')))
+    }] }}"
+
+# AUTHZ-09 | WMS→OMS 반품검수 wms.return.inspected 비동기 이벤트(RabbitMQ) 발행/구독 권한
+- name: "AUTHZ-09 | 판정 기록(RabbitMQ 접근정보 미확정 또는 계정 미분리 — SKIP)"
+  vars:
+    authz09_info_missing: "{{ (authz09_rabbitmq_management_url is none) or (authz09_rabbitmq_readonly_user_secret is none) }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'AUTHZ-09', 'item': 'WMS→OMS 반품검수 비동기 이벤트(wms.return.inspected) 발행/구독 권한', 'target': 'rabbitmq',
+      'status': 'SKIP',
+      'detail': (
+        '서비스별 RabbitMQ 계정이 아직 분리 안 됨(공통 계정 공유) — BE팀 확인상 분리는 가능하나(application-prod.yml이 서비스 단위 계정 주입 구조) 인프라팀이 실제로 WMS/OMS 계정을 만들어주기 전까지는 권한 조회로 발행/구독 주체 구분 불가, 판정 보류' if not authz09_info_missing
+        else 'RabbitMQ Management API 접근정보·조회 전용 계정 미확정 — 인프라점검_확인요청_트래킹.md 참고'
+      )
+    }] }}"
+  when: authz09_shared_account_blocks_check or authz09_info_missing
+
+# AUTHZ-09 (실측) | 계정 분리·접근정보 확정 후 실제 RabbitMQ 권한 대조
+- name: "AUTHZ-09 | 실측에 필요한 값 충족 여부 확인"
+  ansible.builtin.set_fact:
+    authz09_ready: "{{ (not authz09_shared_account_blocks_check)
+      and (not authz09_info_missing)
+      and (authz09_rabbitmq_publisher_user is not none)
+      and (authz09_rabbitmq_consumer_user is not none)
+      and (authz09_rabbitmq_exchange_dedicated is not none)
+      and (authz09_rabbitmq_oms_queue is not none) }}"
+
+- name: "AUTHZ-09 | 판정 기록(계정 매핑/큐/전용여부 일부 미확정 — SKIP)"
+  vars:
+    authz09_missing_list: "{{
+      (['WMS 계정명(authz09_rabbitmq_publisher_user)'] if authz09_rabbitmq_publisher_user is none else []) +
+      (['OMS 계정명(authz09_rabbitmq_consumer_user)'] if authz09_rabbitmq_consumer_user is none else []) +
+      (['exchange 전용/공용 여부(authz09_rabbitmq_exchange_dedicated)'] if authz09_rabbitmq_exchange_dedicated is none else []) +
+      (['OMS 구독 큐 이름(authz09_rabbitmq_oms_queue)'] if authz09_rabbitmq_oms_queue is none else [])
+    }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'AUTHZ-09', 'item': 'WMS→OMS 반품검수 비동기 이벤트(wms.return.inspected) 발행/구독 권한', 'target': 'rabbitmq',
+      'status': 'SKIP',
+      'detail': 'RabbitMQ 접근정보·계정 분리는 확인됐으나 아직 값이 없는 항목: ' ~ (authz09_missing_list | join(', ')) ~ ' — 인프라점검_확인요청_트래킹.md 17-1/17-2번 참고'
+    }] }}"
+  when: (not authz09_shared_account_blocks_check) and (not authz09_info_missing) and (not authz09_ready)
+
+- name: "AUTHZ-09 | RabbitMQ 조회 전용 계정 Secret 조회"
+  kubernetes.core.k8s_info:
+    kind: Secret
+    name: "{{ authz09_rabbitmq_readonly_user_secret }}"
+    namespace: "{{ authz_backend_namespace }}"
+  register: authz09_secret_raw
+  failed_when: false
+  when: authz09_ready
+
+- name: "AUTHZ-09 | 조회 계정 자격증명 디코딩"
+  ansible.builtin.set_fact:
+    authz09_ro_username: "{{ authz09_secret_raw.resources[0].data.username | b64decode }}"
+    authz09_ro_password: "{{ authz09_secret_raw.resources[0].data.password | b64decode }}"
+  when:
+    - authz09_ready
+    - authz09_secret_raw.resources is defined
+    - authz09_secret_raw.resources | length > 0
+
+- name: "AUTHZ-09 | WMS/OMS 계정 기본 permission(configure/write/read) 조회"
+  ansible.builtin.uri:
+    url: "{{ authz09_rabbitmq_management_url }}/api/permissions/{{ authz09_rabbitmq_vhost | urlencode }}/{{ item }}"
+    method: GET
+    url_username: "{{ authz09_ro_username }}"
+    url_password: "{{ authz09_ro_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+  register: authz09_perm_raw
+  failed_when: false
+  loop:
+    - "{{ authz09_rabbitmq_publisher_user }}"
+    - "{{ authz09_rabbitmq_consumer_user }}"
+  loop_control:
+    label: "{{ item }}"
+  when: authz09_ready and authz09_ro_username is defined
+
+- name: "AUTHZ-09 | 공용 exchange인 경우 topic-permission(routing key 제한) 조회"
+  ansible.builtin.uri:
+    url: "{{ authz09_rabbitmq_management_url }}/api/topic-permissions/{{ authz09_rabbitmq_vhost | urlencode }}/{{ item }}"
+    method: GET
+    url_username: "{{ authz09_ro_username }}"
+    url_password: "{{ authz09_ro_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+  register: authz09_topic_perm_raw
+  failed_when: false
+  loop:
+    - "{{ authz09_rabbitmq_publisher_user }}"
+    - "{{ authz09_rabbitmq_consumer_user }}"
+  loop_control:
+    label: "{{ item }}"
+  when: authz09_ready and (not authz09_rabbitmq_exchange_dedicated) and authz09_ro_username is defined
+
+- name: "AUTHZ-09 | 판정 기록(실측)"
+  vars:
+    authz09_query_ok: "{{ authz09_ready and authz09_perm_raw is defined and authz09_perm_raw.results is defined
+      and (authz09_perm_raw.results | selectattr('status', 'defined') | selectattr('status', 'equalto', 200) | list | length == 2) }}"
+    authz09_wms_perm: "{{ (authz09_perm_raw.results | selectattr('item', 'equalto', authz09_rabbitmq_publisher_user) | map(attribute='json') | list | first) if authz09_query_ok else {} }}"
+    authz09_oms_perm: "{{ (authz09_perm_raw.results | selectattr('item', 'equalto', authz09_rabbitmq_consumer_user) | map(attribute='json') | list | first) if authz09_query_ok else {} }}"
+    authz09_wms_write_pattern: "{{ authz09_wms_perm.write | default('') }}"
+    authz09_oms_read_pattern: "{{ authz09_oms_perm.read | default('') }}"
+    authz09_wms_write_ok: "{{ authz09_query_ok and authz09_wms_write_pattern != '' and authz09_wms_write_pattern != '.*'
+      and authz09_rabbitmq_exchange is match(authz09_wms_write_pattern) }}"
+    authz09_oms_read_ok: "{{ authz09_query_ok and authz09_oms_read_pattern != '' and authz09_oms_read_pattern != '.*'
+      and authz09_rabbitmq_oms_queue is match(authz09_oms_read_pattern) }}"
+    authz09_topic_wms_pattern: "{{ (authz09_topic_perm_raw.results | default([]) | selectattr('item', 'equalto', authz09_rabbitmq_publisher_user)
+      | map(attribute='json.write') | list | first) | default('', true) }}"
+    authz09_topic_oms_pattern: "{{ (authz09_topic_perm_raw.results | default([]) | selectattr('item', 'equalto', authz09_rabbitmq_consumer_user)
+      | map(attribute='json.read') | list | first) | default('', true) }}"
+    authz09_topic_ok: "{{ true if authz09_rabbitmq_exchange_dedicated else (
+        authz09_topic_wms_pattern != '' and authz09_rabbitmq_routing_key is match(authz09_topic_wms_pattern)
+        and authz09_topic_oms_pattern != '' and authz09_rabbitmq_routing_key is match(authz09_topic_oms_pattern)
+      ) }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'AUTHZ-09', 'item': 'WMS→OMS 반품검수 비동기 이벤트(wms.return.inspected) 발행/구독 권한', 'target': 'rabbitmq',
+      'status': ('SKIP' if not authz09_query_ok else ('PASS' if (authz09_wms_write_ok and authz09_oms_read_ok and authz09_topic_ok) else 'FAIL')),
+      'detail': (
+        'RabbitMQ Management API 권한 조회 실패' if not authz09_query_ok else
+        ('WMS write=' ~ (authz09_wms_write_pattern if authz09_wms_write_pattern != '' else '없음')
+         ~ ', OMS read=' ~ (authz09_oms_read_pattern if authz09_oms_read_pattern != '' else '없음')
+         ~ (' / topic permission(routing key 제한) 불일치' if (not authz09_rabbitmq_exchange_dedicated and not authz09_topic_ok) else '')
+         ~ (' — 최소권한 기준 일치' if (authz09_wms_write_ok and authz09_oms_read_ok and authz09_topic_ok) else ' — 최소권한 위반'))
+      )
+    }] }}"
+  when: authz09_ready
+
+# SVC-01 | 서비스 간 NetworkPolicy 화이트리스트 (pair 단위 caller→callee 대조)
+- name: "SVC-01 | 허용 목록 기준 대상(callee) 서비스 목록 확정"
+  ansible.builtin.set_fact:
+    svc01_callees: "{{ svc01_allowed_service_calls | map(attribute='callee') | unique | list }}"
+
+- name: "SVC-01 | callee별 NetworkPolicy 판정"
+  vars:
+    svc01_matched_np: "{{ authz_netpol_raw.resources | default([])
+      | selectattr('spec.podSelector.matchLabels.app', 'defined')
+      | selectattr('spec.podSelector.matchLabels.app', 'equalto', item) | list }}"
+    svc01_observed_callers: "{{ svc01_matched_np
+      | map(attribute='spec.ingress') | select('defined') | list | sum(start=[])
+      | map(attribute='from') | select('defined') | list | sum(start=[])
+      | map(attribute='podSelector.matchLabels.app') | select('defined') | list }}"
+    svc01_allowed_callers: "{{ svc01_allowed_service_calls | selectattr('callee', 'equalto', item) | map(attribute='caller') | list }}"
+    svc01_unauthorized: "{{ svc01_observed_callers | difference(svc01_allowed_callers) }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'SVC-01', 'item': '서비스 간 NetworkPolicy 화이트리스트', 'target': item,
+      'status': ('FAIL' if (svc01_matched_np | length == 0 or svc01_unauthorized | length > 0) else 'PASS'),
+      'detail': (
+        'NetworkPolicy 없음(default-deny 미적용) — 절대기준 위반' if svc01_matched_np | length == 0
+        else ('허용되지 않은 출발지: ' ~ (svc01_unauthorized | join(', ')) if svc01_unauthorized | length > 0
+        else '허용 목록과 일치(허용 출발지: ' ~ (svc01_allowed_callers | join(', ') if svc01_allowed_callers | length > 0 else '없음') ~ ')')
+      )
+    }] }}"
+  loop: "{{ svc01_callees }}"
+  when: authz_netpol_raw.resources is defined
+
+- name: "SVC-01 | 판정 기록(조회 실패)"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'SVC-01', 'item': '서비스 간 NetworkPolicy 화이트리스트', 'target': authz_backend_namespace,
+      'status': 'SKIP', 'detail': 'NetworkPolicy 조회 실패'
+    }] }}"
+  when: authz_netpol_raw.resources is not defined

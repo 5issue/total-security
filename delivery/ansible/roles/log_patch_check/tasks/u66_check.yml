@@ -1,7 +1,7 @@
 ---
 # u66_check.yml — U-66(정책에 따른 시스템 로깅 설정) 점검
 
-- name: "U-66 | 미구현 로그 항목 존재 시 FAIL"
+- name: "U-66 | 미구현 로그 항목 존재 시 FAIL(의도된 결과, 버그 아님)"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-66', 'item': '정책에 따른 시스템 로깅 설정', 'target': '전체(CloudWatch 로그그룹)',
@@ -12,7 +12,7 @@
   when: u66_missing_log_categories | default([]) | length > 0
   run_once: true
 
-- name: "U-66 | 로그그룹 보관기간 점검 — mgmt 서버 AWS API 조회"
+- name: "U-66 | 로그그룹 보관기간 점검(인프라팀 구현 완료 후 전환) — mgmt 서버 AWS API 조회"
   ansible.builtin.include_role:
     name: log_patch_check
     tasks_from: log_retention_check

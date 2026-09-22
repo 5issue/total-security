@@ -5,6 +5,8 @@
   ansible.builtin.set_fact:
     pg_login_user: ""
     pg_login_password: ""
+    pg_admin_user: ""
+    pg_admin_password: ""
 
 - name: "{{ db_conn.service }} | K8s Secret에서 자격증명 조회"
   ansible.builtin.set_fact:
@@ -13,13 +15,20 @@
   when: db_conn.secret_ref is not none
   ignore_errors: true
 
-# D-01 | 기본 계정(postgres) 잠금·유효기간 상태
+- name: "{{ db_conn.service }} | K8s Secret에서 관리자(admin) 자격증명 조회"
+  ansible.builtin.set_fact:
+    pg_admin_user: "{{ lookup('kubernetes.core.k8s', kind='Secret', name=dbms_admin_connections.postgresql.secret_ref, namespace=dbms_admin_connections.postgresql.namespace | default('default')) | json_query('data.username') | b64decode }}"
+    pg_admin_password: "{{ lookup('kubernetes.core.k8s', kind='Secret', name=dbms_admin_connections.postgresql.secret_ref, namespace=dbms_admin_connections.postgresql.namespace | default('default')) | json_query('data.password') | b64decode }}"
+  when: dbms_admin_connections.postgresql.secret_ref is not none
+  ignore_errors: true
+
+# D-01 | 기본 계정(postgres) 잠금·유효기간 상태 (SKIP 고정 — 1회성 점검으로 원본 비밀번호 변경 여부 확인 불가)
 - name: "{{ db_conn.service }} | D-01 postgres 계정 상태 조회(참고용)"
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
     db: postgres
     query: "SELECT rolcanlogin, rolvaliduntil FROM pg_roles WHERE rolname='postgres'"
   register: d01_raw
@@ -38,8 +47,8 @@
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
     db: postgres
     query: "SELECT rolname FROM pg_roles WHERE rolname NOT LIKE 'pg\\_%' AND rolname != 'postgres'"
   register: d02_raw
@@ -47,19 +56,20 @@
 
 - name: "{{ db_conn.service }} | D-02 판정 기록"
   vars:
+    d02_query_ok: "{{ d02_raw.query_result is defined }}"
     d02_accounts: "{{ d02_raw.query_result | default([]) | map(attribute='rolname') | list }}"
     d02_unauthorized: "{{ d02_accounts | difference(d02_unnecessary_account_whitelist | default([])) if d02_unnecessary_account_whitelist else [] }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-02', 'item': '데이터베이스의 불필요 계정을 제거하거나, 잠금설정 후 사용', 'target': db_conn.service,
-      'status': 'SKIP' if d02_unnecessary_account_whitelist is none else ('PASS' if d02_unauthorized | length == 0 else 'FAIL'),
+      'status': 'SKIP' if d02_unnecessary_account_whitelist is none else ('PASS' if (d02_query_ok and d02_unauthorized | length == 0) else 'FAIL'),
       'detail': (
         '전체 Role 목록(화이트리스트 TODO, 참고용): ' ~ (d02_accounts | join(', ') if d02_accounts | length > 0 else '없음') if d02_unnecessary_account_whitelist is none
-        else '화이트리스트 외 계정: ' ~ (d02_unauthorized | join(', ') if d02_unauthorized | length > 0 else '없음')
+        else ('조회 실패' if not d02_query_ok else '화이트리스트 외 계정: ' ~ (d02_unauthorized | join(', ') if d02_unauthorized | length > 0 else '없음'))
       )
     }] }}"
 
-# D-03 | 비밀번호 사용기간·복잡도
+# D-03 | 비밀번호 사용기간·복잡도 (passwordcheck 확장 설치 여부로 참고 확인)
 - name: "{{ db_conn.service }} | D-03 passwordcheck 확장 설치 여부 조회"
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
@@ -90,8 +100,8 @@
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
     db: postgres
     query: "SELECT rolname FROM pg_roles WHERE rolsuper=true AND rolname != 'postgres'"
   register: d04_raw
@@ -99,19 +109,20 @@
 
 - name: "{{ db_conn.service }} | D-04 판정 기록"
   vars:
+    d04_query_ok: "{{ d04_raw.query_result is defined }}"
     d04_admins: "{{ d04_raw.query_result | default([]) | map(attribute='rolname') | list }}"
     d04_unauthorized: "{{ d04_admins | difference(d04_admin_account_whitelist | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-04', 'item': '데이터베이스 관리자 권한을 꼭 필요한 계정 및 그룹에 대해서만 허용', 'target': db_conn.service,
-      'status': 'SKIP' if d04_admin_account_whitelist is none else ('PASS' if d04_unauthorized | length == 0 else 'FAIL'),
+      'status': 'SKIP' if d04_admin_account_whitelist is none else ('PASS' if (d04_query_ok and d04_unauthorized | length == 0) else 'FAIL'),
       'detail': (
         'SUPERUSER 보유 Role(화이트리스트 TODO, 참고용): ' ~ (d04_admins | join(', ') if d04_admins | length > 0 else '없음') if d04_admin_account_whitelist is none
-        else '화이트리스트 외 관리자 Role: ' ~ (d04_unauthorized | join(', ') if d04_unauthorized | length > 0 else '없음')
+        else ('조회 실패' if not d04_query_ok else '화이트리스트 외 관리자 Role: ' ~ (d04_unauthorized | join(', ') if d04_unauthorized | length > 0 else '없음'))
       )
     }] }}"
 
-# D-05 | 비밀번호 재사용 제한 (해당없음)
+# D-05 | 비밀번호 재사용 제한 (원문 대상에 PostgreSQL 미기재, 네이티브 미지원)
 - name: "{{ db_conn.service }} | D-05 판정 기록(해당없음)"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
@@ -125,8 +136,8 @@
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
     db: postgres
     query: "SELECT rolname FROM pg_roles WHERE rolcanlogin=true AND rolname != 'postgres'"
   register: d06_raw
@@ -134,6 +145,7 @@
 
 - name: "{{ db_conn.service }} | D-06 판정 기록"
   vars:
+    d06_query_ok: "{{ d06_raw.query_result is defined }}"
     d06_users: "{{ d06_raw.query_result | default([]) | map(attribute='rolname') | list }}"
     d06_expected: "{{ dbms_service_accounts | selectattr('database', 'equalto', db_conn.service) | map(attribute='account') | list }}"
     d06_unexpected: "{{ d06_users | difference(d06_expected) }}"
@@ -141,11 +153,11 @@
     check_results: "{{ check_results + [{
       'id': 'D-06', 'item': 'DB 사용자 계정을 개별적으로 부여하여 사용', 'target': db_conn.service,
       'status': (
-        'REVIEW' if d06_expected | length == 0 else ('PASS' if d06_unexpected | length == 0 else 'FAIL')
+        'REVIEW' if d06_expected | length == 0 else ('PASS' if (d06_query_ok and d06_unexpected | length == 0) else 'FAIL')
       ),
       'detail': (
         'dbms_service_accounts에 이 DB(' ~ db_conn.service ~ ')에 매핑된 계정 없음 — group_vars 매핑 확인 필요. 전체 Role: ' ~ (d06_users | join(', ') if d06_users | length > 0 else '없음') if d06_expected | length == 0
-        else '기대 계정(' ~ (d06_expected | join(', ')) ~ ') 외 Role 발견: ' ~ (d06_unexpected | join(', ') if d06_unexpected | length > 0 else '없음')
+        else ('조회 실패' if not d06_query_ok else '기대 계정(' ~ (d06_expected | join(', ')) ~ ') 외 Role 발견: ' ~ (d06_unexpected | join(', ') if d06_unexpected | length > 0 else '없음'))
       )
     }] }}"
 
@@ -154,8 +166,8 @@
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
     db: postgres
     query: "SHOW password_encryption"
   register: d08_raw
@@ -169,7 +181,7 @@
       'detail': d08_raw.query_result | default('조회 실패') | string | truncate(150)
     }] }}"
 
-# D-09 | 로그인 실패 잠금 (해당없음)
+# D-09 | 로그인 실패 잠금 — PostgreSQL 네이티브 미지원
 - name: "{{ db_conn.service }} | D-09 판정 기록(해당없음)"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
@@ -185,8 +197,8 @@
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
     db: postgres
     query: >-
       SELECT grantee, table_name FROM information_schema.table_privileges
@@ -202,10 +214,10 @@
     check_results: "{{ check_results + [{
       'id': 'D-11', 'item': '시스템 테이블 접근 제한', 'target': db_conn.service,
       'status': 'PASS' if (d11_raw.query_result is defined and d11_extra | length == 0) else 'FAIL',
-      'detail': 'PUBLIC 과다 권한: ' ~ (d11_extra | string | truncate(150) if d11_extra | length > 0 else '없음')
+      'detail': '조회 실패' if d11_raw.query_result is not defined else ('PUBLIC 과다 권한: ' ~ (d11_extra | string | truncate(150) if d11_extra | length > 0 else '없음'))
     }] }}"
 
-# D-17 | Audit Table 접근 제한 (pgAudit 확장 로드 여부로 판정)
+# D-17 | Audit Table 접근 제한 (pgAudit 확장 로드 여부로 조건부 판정)
 - name: "{{ db_conn.service }} | D-17 shared_preload_libraries 조회"
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
@@ -232,8 +244,8 @@
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
     db: "{{ db_conn.database | default('postgres') }}"
     query: >
       SELECT table_schema, table_name, privilege_type FROM information_schema.table_privileges
@@ -246,7 +258,7 @@
     check_results: "{{ check_results + [{
       'id': 'D-18', 'item': '응용프로그램 또는 DBA 계정의 Role이 Public으로 설정되지 않도록 조정', 'target': db_conn.service,
       'status': 'PASS' if (d18_raw.query_result is defined and d18_raw.query_result | length == 0) else 'FAIL',
-      'detail': 'PUBLIC 권한 부여 현황(절대기준 — 있으면 FAIL): ' ~ (d18_raw.query_result | default([]) | string | truncate(150))
+      'detail': '조회 실패' if d18_raw.query_result is not defined else ('PUBLIC 권한 부여 현황(절대기준 — 있으면 FAIL): ' ~ (d18_raw.query_result | string | truncate(150)))
     }] }}"
 
 # D-20 | 인가되지 않은 Object Owner 제한
@@ -254,8 +266,8 @@
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
     db: "{{ db_conn.database | default('postgres') }}"
     query: "SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema')"
   register: d20_raw
@@ -263,15 +275,16 @@
 
 - name: "{{ db_conn.service }} | D-20 판정 기록"
   vars:
+    d20_query_ok: "{{ d20_raw.query_result is defined }}"
     d20_owners: "{{ d20_raw.query_result | default([]) | map(attribute='tableowner') | list }}"
     d20_unauthorized: "{{ d20_owners | difference(d20_admin_owner_whitelist | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-20', 'item': '인가되지 않은 Object Owner의 제한', 'target': db_conn.service,
-      'status': 'SKIP' if d20_admin_owner_whitelist is none else ('PASS' if d20_unauthorized | length == 0 else 'FAIL'),
+      'status': 'SKIP' if d20_admin_owner_whitelist is none else ('PASS' if (d20_query_ok and d20_unauthorized | length == 0) else 'FAIL'),
       'detail': (
         '테이블 소유자 목록(화이트리스트 TODO, 참고용): ' ~ (d20_owners | join(', ') if d20_owners | length > 0 else '없음') if d20_admin_owner_whitelist is none
-        else '화이트리스트 외 소유자: ' ~ (d20_unauthorized | join(', ') if d20_unauthorized | length > 0 else '없음')
+        else ('조회 실패' if not d20_query_ok else '화이트리스트 외 소유자: ' ~ (d20_unauthorized | join(', ') if d20_unauthorized | length > 0 else '없음'))
       )
     }] }}"
 
@@ -280,8 +293,8 @@
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
     db: "{{ db_conn.database | default('postgres') }}"
     query: "SELECT grantee, table_name FROM information_schema.role_table_grants WHERE is_grantable='YES'"
   register: d21_raw
@@ -289,13 +302,14 @@
 
 - name: "{{ db_conn.service }} | D-21 판정 기록"
   vars:
+    d21_query_ok: "{{ d21_raw.query_result is defined }}"
     d21_grantees: "{{ d21_raw.query_result | default([]) | map(attribute='grantee') | list | unique }}"
     d21_unauthorized: "{{ d21_grantees | difference(d21_grant_option_admin_whitelist | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-21', 'item': '인가되지 않은 GRANT OPTION 사용 제한', 'target': db_conn.service,
-      'status': 'PASS' if d21_unauthorized | length == 0 else 'FAIL',
-      'detail': 'GRANT OPTION 보유 계정: ' ~ (d21_grantees | join(', ') if d21_grantees | length > 0 else '없음') ~ ' / 화이트리스트(' ~ (d21_grant_option_admin_whitelist | join(', ')) ~ ') 외: ' ~ (d21_unauthorized | join(', ') if d21_unauthorized | length > 0 else '없음')
+      'status': 'PASS' if (d21_query_ok and d21_unauthorized | length == 0) else 'FAIL',
+      'detail': '조회 실패' if not d21_query_ok else ('GRANT OPTION 보유 계정: ' ~ (d21_grantees | join(', ') if d21_grantees | length > 0 else '없음') ~ ' / 화이트리스트(' ~ (d21_grant_option_admin_whitelist | join(', ')) ~ ') 외: ' ~ (d21_unauthorized | join(', ') if d21_unauthorized | length > 0 else '없음'))
     }] }}"
 
 # D-25 | 주기적 보안 패치 적용 — roles/dbms_common/tasks/k8s_pod_checks.yml 참고
