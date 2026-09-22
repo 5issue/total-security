@@ -76,13 +76,21 @@ VPC_CNI_IRSA_NOT_SEPARATED_NOTE = (
 
 # 2.3(기타 서비스) 인스턴스/네트워크 외 서비스별 IAM 최소권한 정의서
 SERVICE_IAM_POLICY_MAP = {
-    "backend_service_account": {"namespace": "backend", "name": "backend-common-sa"},
-    "backend_services": [
-        "auth-service", "order-service", "payment-service", "product-service",
-        "user-service", "oms-service", "wms-service", "scm-service",
-    ],
+    "namespace": "backend",
+    "service_accounts": {
+        "auth-service": "auth-sa",
+        "order-service": "order-sa",
+        "payment-service": "payment-sa",
+        "product-service": "product-sa",
+        "user-service": "user-sa",
+        "oms-service": "oms-sa",
+        "wms-service": "wms-sa",
+        "scm-service": "scm-sa",
+    },
 }
-SERVICE_IAM_KMS_CHECK_ENABLED = False
+SERVICE_IAM_KMS_CHECK_ENABLED = True
+SERVICE_IAM_KMS_ALLOWED_SERVICES = ["auth-service"]
+SERVICE_IAM_KMS_ALLOWED_ACTIONS = ["kms:Sign", "kms:GetPublicKey"]
 
 # 3.2 보안그룹 인/아웃바운드 규칙 baseline
 SG_ALLOWED_INBOUND_CIDR = "10.0.0.0/16"

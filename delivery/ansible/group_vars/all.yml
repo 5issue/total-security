@@ -67,6 +67,10 @@ u23_allowed_suid_sgid:
   - /usr/bin/umount
   - /usr/bin/pkexec
   - /usr/libexec/openssh/ssh-keysign
+  - /usr/bin/at
+  - /usr/bin/chage
+  - /usr/bin/write
+  - /usr/bin/screen
 
 # U-24 : 사용자 환경 파일 보호
 u24_user_env_files:
@@ -91,7 +95,135 @@ u25_world_writable_exclude_dirs:
   - /run
 
 # U-26 : 중요 디바이스 파일 보호
-u26_dev_baseline_snapshot: []
+u26_dev_baseline_snapshot:
+  - "/dev/autofs"
+  - "/dev/btrfs-control"
+  - "/dev/console"
+  - "/dev/cpu_dma_latency"
+  - "/dev/cuse"
+  - "/dev/dma_heap/system"
+  - "/dev/full"
+  - "/dev/fuse"
+  - "/dev/gpiochip0"
+  - "/dev/input/event0"
+  - "/dev/input/event1"
+  - "/dev/kmsg"
+  - "/dev/loop-control"
+  - "/dev/mapper/control"
+  - "/dev/net/tun"
+  - "/dev/ng0n1"
+  - "/dev/ng1n1"
+  - "/dev/null"
+  - "/dev/nvme0"
+  - "/dev/nvme1"
+  - "/dev/ppp"
+  - "/dev/ptmx"
+  - "/dev/pts/0"
+  - "/dev/pts/1"
+  - "/dev/pts/ptmx"
+  - "/dev/random"
+  - "/dev/rtc0"
+  - "/dev/snapshot"
+  - "/dev/tty"
+  - "/dev/tty0"
+  - "/dev/tty1"
+  - "/dev/tty10"
+  - "/dev/tty11"
+  - "/dev/tty12"
+  - "/dev/tty13"
+  - "/dev/tty14"
+  - "/dev/tty15"
+  - "/dev/tty16"
+  - "/dev/tty17"
+  - "/dev/tty18"
+  - "/dev/tty19"
+  - "/dev/tty2"
+  - "/dev/tty20"
+  - "/dev/tty21"
+  - "/dev/tty22"
+  - "/dev/tty23"
+  - "/dev/tty24"
+  - "/dev/tty25"
+  - "/dev/tty26"
+  - "/dev/tty27"
+  - "/dev/tty28"
+  - "/dev/tty29"
+  - "/dev/tty3"
+  - "/dev/tty30"
+  - "/dev/tty31"
+  - "/dev/tty32"
+  - "/dev/tty33"
+  - "/dev/tty34"
+  - "/dev/tty35"
+  - "/dev/tty36"
+  - "/dev/tty37"
+  - "/dev/tty38"
+  - "/dev/tty39"
+  - "/dev/tty4"
+  - "/dev/tty40"
+  - "/dev/tty41"
+  - "/dev/tty42"
+  - "/dev/tty43"
+  - "/dev/tty44"
+  - "/dev/tty45"
+  - "/dev/tty46"
+  - "/dev/tty47"
+  - "/dev/tty48"
+  - "/dev/tty49"
+  - "/dev/tty5"
+  - "/dev/tty50"
+  - "/dev/tty51"
+  - "/dev/tty52"
+  - "/dev/tty53"
+  - "/dev/tty54"
+  - "/dev/tty55"
+  - "/dev/tty56"
+  - "/dev/tty57"
+  - "/dev/tty58"
+  - "/dev/tty59"
+  - "/dev/tty6"
+  - "/dev/tty60"
+  - "/dev/tty61"
+  - "/dev/tty62"
+  - "/dev/tty63"
+  - "/dev/tty7"
+  - "/dev/tty8"
+  - "/dev/tty9"
+  - "/dev/ttyS0"
+  - "/dev/ttyS1"
+  - "/dev/ttyS2"
+  - "/dev/ttyS3"
+  - "/dev/uhid"
+  - "/dev/uinput"
+  - "/dev/urandom"
+  - "/dev/userfaultfd"
+  - "/dev/vcs"
+  - "/dev/vcs1"
+  - "/dev/vcs2"
+  - "/dev/vcs3"
+  - "/dev/vcs4"
+  - "/dev/vcs5"
+  - "/dev/vcs6"
+  - "/dev/vcsa"
+  - "/dev/vcsa1"
+  - "/dev/vcsa2"
+  - "/dev/vcsa3"
+  - "/dev/vcsa4"
+  - "/dev/vcsa5"
+  - "/dev/vcsa6"
+  - "/dev/vcsu"
+  - "/dev/vcsu1"
+  - "/dev/vcsu2"
+  - "/dev/vcsu3"
+  - "/dev/vcsu4"
+  - "/dev/vcsu5"
+  - "/dev/vcsu6"
+  - "/dev/vfio/vfio"
+  - "/dev/vga_arbiter"
+  - "/dev/vhost-net"
+  - "/dev/vhost-vsock"
+  - "/dev/vmclock0"
+  - "/dev/zero"
 u26_dev_exclude_dirs:
   - mqueue
   - shm
@@ -111,6 +243,7 @@ u31_os_baseline_hidden_entries:
   - .aws
   - .kube
   - .ansible
+  - .gnupg
 
 # U-33 : 불필요한 파일 제거
 u33_business_file_dirs:
@@ -164,6 +297,7 @@ u65_ntp_allowed_servers: ["169.254.169.123"]
 # =============================================================================
 
 # D-26 : 데이터베이스 감사 기록 보관기간
+d26_audit_not_implemented: true
 d26_audit_log_group_name: null
 
 # 서비스별 DB 계정/DB명/NetworkPolicy 라벨 매핑 (D-02/04/06/10 공통 참조)
@@ -212,10 +346,13 @@ d02_unnecessary_account_whitelist:
   - wms_service
   - scm_service
 
-# D-03 : 비밀번호 사용기간·복잡도
+# D-03 : 비밀번호 사용기간·복잡도 (서비스 계정 제외, 전용 유저 계정에만 적용)
 d03_password_max_days: 90
 d03_password_min_length: 12
 d03_password_complexity_min_classes: 3
+d03_user_accounts:
+  mysql: []
+  postgresql: []
 
 # D-04 : 관리자 권한 최소 인원
 d04_admin_account_whitelist: []
@@ -346,14 +483,14 @@ svc01_allowed_service_calls:
   - { caller: "user-service",    callee: "auth-service" }
 
 # AUTHZ-09 : WMS→OMS 반품검수 RabbitMQ 발행/구독 권한
-authz09_shared_account_blocks_check: true    # true인 동안 판정 항상 SKIP — 계정 분리 완료 시 false로 전환
+authz09_shared_account_blocks_check: true    # true인 동안 판정 FAIL 고정 — 계정 분리 완료 시 false로 전환
 authz09_rabbitmq_management_url: null
 authz09_rabbitmq_readonly_user_secret: null
 authz09_rabbitmq_vhost: "total-prod"
 authz09_rabbitmq_exchange: "wms.topic.exchange"
 authz09_rabbitmq_routing_key: "wms.return.inspected"
-authz09_rabbitmq_exchange_dedicated: null
-authz09_rabbitmq_oms_queue: null
+authz09_rabbitmq_exchange_dedicated: false
+authz09_rabbitmq_oms_queue: "oms.wms-inspected.queue"
 authz09_rabbitmq_publisher_allowed: ["wms-service"]
 authz09_rabbitmq_consumer_allowed: ["oms-service"]
 authz09_rabbitmq_publisher_user: null

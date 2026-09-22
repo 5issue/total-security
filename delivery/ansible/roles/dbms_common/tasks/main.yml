@@ -67,7 +67,17 @@
   when: dbms_connections | length > 0
 
 # D-26 | 감사기록 보관기간 (DB 접속 여부와 무관하게 항상 실행)
-- name: "D-26 | DBMS 감사기록 보관기간 점검 — mgmt 서버 AWS API 조회"
+- name: "D-26 | 미구현 확인 시 FAIL(의도된 결과, 버그 아님)"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'D-26', 'item': '데이터베이스의 접근, 변경, 삭제 등의 감사 기록이 기관의 감사 기록 정책에 적합하도록 설정', 'target': '전체(DBMS 감사로그)',
+      'status': 'FAIL',
+      'detail': 'DB 엔진 DML 감사로그(pgaudit/MySQL Audit Plugin) CloudWatch 연동 미구현 확인(I/O 부하·비용 이유) — EKS 컨트롤 플레인 감사로그(/aws/eks/test-eks/cluster)와는 별개'
+    }] }}"
+  when: d26_audit_not_implemented | default(false)
+  run_once: true
+
+- name: "D-26 | DBMS 감사기록 보관기간 점검(인프라팀 구현 완료 후 전환) — mgmt 서버 AWS API 조회"
   ansible.builtin.include_role:
     name: log_patch_check
     tasks_from: log_retention_check
@@ -77,4 +87,5 @@
     lrc_log_group_name: "{{ d26_audit_log_group_name }}"
     lrc_target: "전체(DBMS 감사로그)"
     lrc_min_days: 365
+  when: not (d26_audit_not_implemented | default(false))
   run_once: true

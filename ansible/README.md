@@ -8,7 +8,7 @@
 | Role | 대상 항목 | 비고 |
 |---|---|---|
 | `roles/account_auth` | U-01~13, U-63 | 계정·인증 |
-| `roles/file_permission` | U-14~30 계열(U-23,26 포함, U-26은 아직 TODO — 아래 표 참고) | 파일·디렉터리 권한 |
+| `roles/file_permission` | U-14~30 계열(U-23,26 포함) | 파일·디렉터리 권한 |
 | `roles/network_service` | U-34~61 계열(U-37,42 포함) | 서비스 활성화 여부 |
 | `roles/log_patch_check` | U-64(패치), U-66(로깅) | mgmt 서버 AWS CLI 조회(SSM/CloudWatch) — 2026-09-10 재분류(제외→자동판정가능(부분)) |
 | `roles/dbms_common` | D-01~26 중 코드화 대상 18개 | mysql.yml/postgresql.yml(SQL) + k8s_pod_checks.yml(D-07,10,14,25 파드/K8s) + log_patch_check 재사용(D-26) |
@@ -77,10 +77,6 @@ D-02,03,04,05,06,10,20,21 등은 전부 확정·자동판정가능으로 전환 
 
 | 항목 | 이유 |
 |---|---|
-| U-26 | `u26_dev_baseline_snapshot` 아직 빈 값(TODO) — 인프라팀에 정상 노드 `/dev` 원본 스냅샷(`dev_devices_baseline.txt`) 요청, 수신 대기 중 |
-| U-28 | 2026-09-20 인프라팀 회신으로 판정기준 재설계 완료 — IP 화이트리스트 대조가 아니라 SG 22번 인바운드 부재(SSM Session Manager 대체, 보완통제 인정) 기반 자동판정. `roles/file_permission/tasks/main.yml` U-28 참고, 별도 화이트리스트 변수 불필요 |
-| D-17 | MySQL은 1차 스코프 제외 확정(SKIP). PostgreSQL은 관리자 화이트리스트(`postgres`)까지 확정됐지만, 실제 "Audit Table"의 위치/존재 여부가 아직 회신 없음 — D-26과 함께 별도 확인 필요, 확인 전까지는 pgAudit 로드 여부로만 판정 |
-| U-64 | AMI 비교 방식·SSM 파라미터 경로 확정 완료 — `u64_nat_latest_ami_ssm_param`(NAT용, arm64 계열)은 kernel-default/minimal 확정이 100%는 아니라 1차 점검 시 `aws ssm get-parameter`로 실제 AMI ID와 대조 검증 권장 |
-| U-23 | SUID/SGID 화이트리스트 확정값 있음 — 단, 파일럿 실측 결과 AL2023 표준 바이너리(`at`,`chage`,`write`,`screen` 등) 일부 누락 발견돼 보정 검토 중 |
-| D-26 | `d26_audit_log_group_name` TODO — D-17 Audit Table 위치와 함께 별도 확인 필요, 값 확정 전까지 SKIP |
-| D-07, D-10, D-14, D-25 | `dbms_connections`에 host/namespace/pod_label_selector 확정 필요(실제 MOCO/CNPG DB 파드 구축 진행 중) |
+| U-64 | AMI 비교 방식·SSM 파라미터 경로 확정 완료 — `u64_nat_latest_ami_ssm_param`(NAT용, arm64 계열)은 kernel-default/minimal 확정이 100%는 아니라 2차 점검 결과로 실제 AMI ID와 맞는지 확인 필요(사전 검증 불필요, 결과 보고 판단) |
+| U-25 | `/var/lib/kubelet/pods` 하위가 K8s가 파드마다 자동 생성하는 마운트 경로라 구조적으로 world-writable — 전체 예외 처리 여부는 그 경로 하위에 실제 업무 파일이 섞여있는지 확인 후 결정(인프라팀 답변 보류 중) |
+| U-33 | FAIL로 잡히는 파일이 AWS 공식 도구(EC2 Instance Connect 등) 관련으로 보인다는 회신 — `u33_business_file_dirs` 예외 처리 여부는 전체 파일 목록 재확인 후 결정 예정(200자 절단 버그는 2026-09-20 수정 완료) |

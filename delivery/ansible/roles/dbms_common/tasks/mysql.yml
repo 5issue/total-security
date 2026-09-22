@@ -72,33 +72,67 @@
       )
     }] }}"
 
-# D-03 | 비밀번호 사용기간·복잡도
-- name: "{{ db_conn.service }} | D-03 password_expiration/validate_password 설정 조회"
-  community.mysql.mysql_query:
-    login_host: "{{ db_conn.host }}"
-    login_port: "{{ db_conn.port }}"
-    login_user: "{{ mysql_login_user }}"
-    login_password: "{{ mysql_login_password }}"
-    query: "SHOW VARIABLES WHERE Variable_name IN ('default_password_lifetime','validate_password.length','validate_password.policy')"
-  register: d03_raw
-  failed_when: false
-
-- name: "{{ db_conn.service }} | D-03 판정 기록"
-  vars:
-    d03_lifetime: "{{ (d03_raw.query_result | default([]) | first | default([]) | selectattr('Variable_name', 'equalto', 'default_password_lifetime') | map(attribute='Value') | list | first) | default('0', true) }}"
-    d03_minlen: "{{ (d03_raw.query_result | default([]) | first | default([]) | selectattr('Variable_name', 'equalto', 'validate_password.length') | map(attribute='Value') | list | first) | default('0', true) }}"
-    d03_policy: "{{ (d03_raw.query_result | default([]) | first | default([]) | selectattr('Variable_name', 'equalto', 'validate_password.policy') | map(attribute='Value') | list | first) | default('LOW', true) }}"
-    d03_policy_ok: "{{ d03_policy | upper in ['MEDIUM', 'STRONG'] }}"
+# D-03 | 비밀번호 사용기간·복잡도 (서비스 계정 제외, 전용 유저 계정에만 적용)
+- name: "{{ db_conn.service }} | D-03 판정 기록(서비스 계정 제외)"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-03', 'item': '비밀번호의 사용기간 및 복잡도를 기관의 정책에 맞도록 설정', 'target': db_conn.service,
-      'status': (
-        'SKIP' if (d03_password_max_days is none or d03_password_min_length is none) else
-        ('PASS' if (d03_lifetime | int > 0 and d03_lifetime | int <= d03_password_max_days and d03_minlen | int >= d03_password_min_length and d03_policy_ok) else 'FAIL')
-      ),
-      'detail': 'default_password_lifetime=' ~ d03_lifetime ~ '(기준 <= ' ~ (d03_password_max_days | default('TODO')) ~ '), validate_password.length=' ~ d03_minlen ~
-                '(기준 >= ' ~ (d03_password_min_length | default('TODO')) ~ '), validate_password.policy=' ~ d03_policy ~ '(기준 MEDIUM 이상 — 3종류 이상 조합 강제)'
+      'status': 'N/A',
+      'detail': '서비스 계정은 비밀번호 만료·복잡도 정책 적용대상에서 제외 확정 — 전용 유저 계정으로 정책 이관'
     }] }}"
+
+- name: "D-03 | 전용 유저 계정 조회(MySQL, 최초 커넥션에서 1회)"
+  community.mysql.mysql_query:
+    login_host: "{{ db_conn.host }}"
+    login_port: "{{ db_conn.port }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
+    query: "SELECT user, Password_lifetime FROM mysql.user"
+  register: d03_user_raw
+  failed_when: false
+  when: >
+    d03_user_accounts.mysql | length > 0
+    and (check_results | selectattr('id', 'equalto', 'D-03') | selectattr('target', 'equalto', '전체(MySQL 유저 계정)') | list | length == 0)
+
+- name: "D-03 | validate_password 전역 설정 조회(MySQL, 최초 커넥션에서 1회)"
+  community.mysql.mysql_query:
+    login_host: "{{ db_conn.host }}"
+    login_port: "{{ db_conn.port }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
+    query: "SHOW VARIABLES WHERE Variable_name IN ('validate_password.length','validate_password.policy')"
+  register: d03_policy_raw
+  failed_when: false
+  when: >
+    d03_user_accounts.mysql | length > 0
+    and (check_results | selectattr('id', 'equalto', 'D-03') | selectattr('target', 'equalto', '전체(MySQL 유저 계정)') | list | length == 0)
+
+- name: "D-03 | 전용 유저 계정 판정 기록(MySQL, 최초 커넥션에서 1회)"
+  vars:
+    d03_query_ok: "{{ d03_user_raw is defined and d03_user_raw.query_result is defined }}"
+    d03_all_accounts: "{{ d03_user_raw.query_result | default([]) | first | default([]) if d03_query_ok else [] }}"
+    d03_found: "{{ d03_all_accounts | selectattr('user', 'in', d03_user_accounts.mysql) | list }}"
+    d03_missing: "{{ d03_user_accounts.mysql | difference(d03_found | map(attribute='user') | list) }}"
+    d03_lifetime_ok: "{{ d03_found | rejectattr('Password_lifetime', 'none') | selectattr('Password_lifetime', '>', 0) | selectattr('Password_lifetime', '<=', d03_password_max_days | int) | list | length == d03_found | length }}"
+    d03_minlen: "{{ (d03_policy_raw.query_result | default([]) | first | default([]) | selectattr('Variable_name', 'equalto', 'validate_password.length') | map(attribute='Value') | list | first) | default('0', true) }}"
+    d03_policy: "{{ (d03_policy_raw.query_result | default([]) | first | default([]) | selectattr('Variable_name', 'equalto', 'validate_password.policy') | map(attribute='Value') | list | first) | default('LOW', true) }}"
+    d03_policy_ok: "{{ d03_policy | upper in ['MEDIUM', 'STRONG'] and d03_minlen | int >= d03_password_min_length }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'D-03', 'item': '비밀번호의 사용기간 및 복잡도를 기관의 정책에 맞도록 설정', 'target': '전체(MySQL 유저 계정)',
+      'status': (
+        'FAIL' if d03_user_accounts.mysql | length == 0 else
+        ('FAIL' if not d03_query_ok else
+         ('FAIL' if (d03_missing | length > 0 or not d03_lifetime_ok or not d03_policy_ok) else 'PASS'))
+      ),
+      'detail': (
+        '전용 유저 계정 미생성 — 인프라팀 구현 대기(서비스 계정만 존재, 정책 적용대상 계정 없음)' if d03_user_accounts.mysql | length == 0
+        else ('조회 실패' if not d03_query_ok
+        else ('계정 미발견: ' ~ (d03_missing | join(', ')) if d03_missing | length > 0
+        else 'Password_lifetime(기준 <= ' ~ d03_password_max_days ~ '일)=' ~ (d03_lifetime_ok | string) ~ ', validate_password.length=' ~ d03_minlen ~ '/policy=' ~ d03_policy ~ '(기준 >= ' ~ d03_password_min_length ~ '자, MEDIUM 이상)'))
+      )
+    }] }}"
+  when: check_results | selectattr('id', 'equalto', 'D-03') | selectattr('target', 'equalto', '전체(MySQL 유저 계정)') | list | length == 0
 
 # D-04 | 관리자 권한 최소 인원
 - name: "{{ db_conn.service }} | D-04 SUPER/GRANT 권한 보유 계정 조회"

@@ -108,30 +108,28 @@ VPC_CNI_IRSA_NOT_SEPARATED_NOTE = (
 )
 
 # 2.3(기타 서비스) 인스턴스/네트워크 외 서비스별 IAM 최소권한 정의서
-# [2026-09-17] S3/SecretManager baseline 확정(윤지수 확인 + total-infra/infra/secrets.tf
-# 실측 대조): ESO 미사용, 개별 서비스 파드의 SecretManager 직접 호출 없음 — Terraform이
-# total-client-secret을 Secrets Manager에 생성 후 frontend/dev 네임스페이스 K8s Secret
-# 으로만 배포하는 구조. 8개 백엔드 서비스 전부 S3·SecretManager 관련 IAM 권한 미보유가 정상.
-#
-# ⚠ KMS는 baseline 자체는 확정(auth-service만 kms:Sign/kms:GetPublicKey, 서명 키 1개
-# 한정, 나머지 7개는 미보유)이나 코드화는 보류. 2026-09-17 total-k8s/total-infra 실측
-# 결과 8개 백엔드 서비스(auth 포함) 전부가 ServiceAccount `backend-common-sa` 하나를
-# 공유하고 있고(k8s/backend/*/deployment.yaml의 serviceAccountName 전부 동일), 이 SA엔
-# eks.amazonaws.com/role-arn annotation이 없음(IRSA 미바인딩) — total-infra의 어떤 .tf
-# 파일에도 backend-common-sa용 aws_iam_role이 없음(2.2 ALB IRSA·EBS CSI IRSA·Karpenter
-# IRSA와 달리 backend 서비스용 IRSA 자체가 아직 구축 안 됨). 게다가 서비스가 SA를
-# 공유하는 구조라, 나중에 IRSA를 붙이더라도 "auth만 KMS 보유"가 구조적으로 불가능
-# (권한을 그 SA에 주면 8개 서비스 전부 상속받음) — 인프라팀에 확인요청 전달함
-# (인프라점검_확인요청_트래킹.md 참고). 그래서 KMS 하위 체크는 SERVICE_IAM_KMS_CHECK_ENABLED
-# 로 게이트해서 SKIP 고정, S3/SecretManager만 우선 코드화.
+# [2026-09-22] 인프라팀이 공용 ServiceAccount(backend-common-sa) 공유 구조를 폐기하고
+# 서비스별 전용 SA + 1:1 IRSA Role로 분리 완료(트래킹표 8-1번) — 서비스별로 SA를 각각
+# 조회해서 S3/SecretManager 과잉권한(전원 미보유가 baseline) + KMS(auth-service만
+# kms:Sign/kms:GetPublicKey 보유, 나머지는 미보유가 baseline)를 대조한다.
+# ⚠ kubectl 확인 결과 ai-sa(kurly-ai-serving)도 존재하나 원래 2.3 스코프(8개 서비스)
+# 밖이라 아래 매핑에는 포함하지 않음 — 스코프에 넣을지는 별도 확인 필요.
 SERVICE_IAM_POLICY_MAP = {
-    "backend_service_account": {"namespace": "backend", "name": "backend-common-sa"},
-    "backend_services": [
-        "auth-service", "order-service", "payment-service", "product-service",
-        "user-service", "oms-service", "wms-service", "scm-service",
-    ],
+    "namespace": "backend",
+    "service_accounts": {
+        "auth-service": "auth-sa",
+        "order-service": "order-sa",
+        "payment-service": "payment-sa",
+        "product-service": "product-sa",
+        "user-service": "user-sa",
+        "oms-service": "oms-sa",
+        "wms-service": "wms-sa",
+        "scm-service": "scm-sa",
+    },
 }
-SERVICE_IAM_KMS_CHECK_ENABLED = False
+SERVICE_IAM_KMS_CHECK_ENABLED = True
+SERVICE_IAM_KMS_ALLOWED_SERVICES = ["auth-service"]
+SERVICE_IAM_KMS_ALLOWED_ACTIONS = ["kms:Sign", "kms:GetPublicKey"]
 
 # 3.2 보안그룹 인/아웃바운드 규칙 baseline
 # [확정 — 2026-09-13 인프라팀 노션 회신] 인바운드는 VPC 내부 대역만 전체 허용, 외부
