@@ -69,31 +69,70 @@
       )
     }] }}"
 
-# D-03 | 비밀번호 사용기간·복잡도 (passwordcheck 확장 설치 여부로 참고 확인)
-- name: "{{ db_conn.service }} | D-03 passwordcheck 확장 설치 여부 조회"
-  community.postgresql.postgresql_query:
-    login_host: "{{ db_conn.host }}"
-    login_port: "{{ db_conn.port }}"
-    login_user: "{{ pg_login_user }}"
-    login_password: "{{ pg_login_password }}"
-    db: postgres
-    query: "SELECT extname FROM pg_extension WHERE extname='passwordcheck'"
-  register: d03_raw
-  failed_when: false
-
-- name: "{{ db_conn.service }} | D-03 판정 기록"
-  vars:
-    d03_ext_installed: "{{ d03_raw.query_result is defined and d03_raw.query_result | length > 0 }}"
+# D-03 | 비밀번호 사용기간·복잡도 (서비스 계정 제외, 전용 유저 계정에만 적용)
+- name: "{{ db_conn.service }} | D-03 판정 기록(서비스 계정 제외)"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-03', 'item': '비밀번호의 사용기간 및 복잡도를 기관의 정책에 맞도록 설정', 'target': db_conn.service,
-      'status': (
-        'SKIP' if (d03_password_max_days is none or d03_password_min_length is none) else
-        ('PASS' if d03_ext_installed else 'FAIL')
-      ),
-      'detail': 'passwordcheck 확장 설치=' ~ (d03_ext_installed | string) ~
-                (' — 조직 정책값(d03_password_max_days/min_length) TODO' if (d03_password_max_days is none or d03_password_min_length is none) else '')
+      'status': 'N/A',
+      'detail': '서비스 계정은 비밀번호 만료·복잡도 정책 적용대상에서 제외 확정 — 전용 유저 계정으로 정책 이관'
     }] }}"
+
+- name: "D-03 | passwordcheck 확장·전용 유저 계정 만료 조회(PostgreSQL, 최초 커넥션에서 1회)"
+  community.postgresql.postgresql_query:
+    login_host: "{{ db_conn.host }}"
+    login_port: "{{ db_conn.port }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
+    db: postgres
+    query: "SELECT extname FROM pg_extension WHERE extname='passwordcheck'"
+  register: d03_ext_raw
+  failed_when: false
+  when: >
+    d03_user_accounts.postgresql | length > 0
+    and (check_results | selectattr('id', 'equalto', 'D-03') | selectattr('target', 'equalto', '전체(PostgreSQL 유저 계정)') | list | length == 0)
+
+- name: "D-03 | 전용 유저 계정 rolvaliduntil 조회(PostgreSQL, 최초 커넥션에서 1회)"
+  community.postgresql.postgresql_query:
+    login_host: "{{ db_conn.host }}"
+    login_port: "{{ db_conn.port }}"
+    login_user: "{{ pg_admin_user }}"
+    login_password: "{{ pg_admin_password }}"
+    db: postgres
+    query: >-
+      SELECT rolname, rolvaliduntil,
+        (rolvaliduntil IS NOT NULL AND rolvaliduntil <= now() + interval '{{ d03_password_max_days }} days') AS within_policy
+      FROM pg_roles
+  register: d03_user_raw
+  failed_when: false
+  when: >
+    d03_user_accounts.postgresql | length > 0
+    and (check_results | selectattr('id', 'equalto', 'D-03') | selectattr('target', 'equalto', '전체(PostgreSQL 유저 계정)') | list | length == 0)
+
+- name: "D-03 | 전용 유저 계정 판정 기록(PostgreSQL, 최초 커넥션에서 1회)"
+  vars:
+    d03_query_ok: "{{ d03_user_raw is defined and d03_user_raw.query_result is defined and d03_ext_raw is defined and d03_ext_raw.query_result is defined }}"
+    d03_ext_installed: "{{ d03_query_ok and (d03_ext_raw.query_result | length > 0) }}"
+    d03_all_roles: "{{ d03_user_raw.query_result | default([]) if d03_query_ok else [] }}"
+    d03_found: "{{ d03_all_roles | selectattr('rolname', 'in', d03_user_accounts.postgresql) | list }}"
+    d03_missing: "{{ d03_user_accounts.postgresql | difference(d03_found | map(attribute='rolname') | list) }}"
+    d03_expiry_ok: "{{ (d03_found | selectattr('within_policy', 'equalto', true) | list | length) == d03_found | length }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'D-03', 'item': '비밀번호의 사용기간 및 복잡도를 기관의 정책에 맞도록 설정', 'target': '전체(PostgreSQL 유저 계정)',
+      'status': (
+        'FAIL' if d03_user_accounts.postgresql | length == 0 else
+        ('FAIL' if not d03_query_ok else
+         ('FAIL' if (d03_missing | length > 0 or not d03_expiry_ok or not d03_ext_installed) else 'PASS'))
+      ),
+      'detail': (
+        '전용 유저 계정 미생성 — 인프라팀 구현 대기(서비스 계정만 존재, 정책 적용대상 계정 없음)' if d03_user_accounts.postgresql | length == 0
+        else ('조회 실패' if not d03_query_ok
+        else ('계정 미발견: ' ~ (d03_missing | join(', ')) if d03_missing | length > 0
+        else 'passwordcheck 확장 설치=' ~ (d03_ext_installed | string) ~ ', rolvaliduntil(기준 <= ' ~ d03_password_max_days ~ '일 이내)=' ~ (d03_expiry_ok | string)))
+      )
+    }] }}"
+  when: check_results | selectattr('id', 'equalto', 'D-03') | selectattr('target', 'equalto', '전체(PostgreSQL 유저 계정)') | list | length == 0
 
 # D-04 | 관리자 권한 최소 인원
 - name: "{{ db_conn.service }} | D-04 SUPERUSER 보유 Role 조회"

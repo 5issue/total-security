@@ -385,54 +385,71 @@ def check_2_2_network_service_policies(iam, cluster_names):
 
 
 def check_2_3_service_policies(iam, cluster_names):
-    # backend-common-sa(IRSA)의 s3:*/secretsmanager:* 과잉권한 대조. KMS는
-    # config.SERVICE_IAM_KMS_CHECK_ENABLED가 True가 되기 전까지 판정에서 제외.
+    # 서비스별 전용 SA(config.SERVICE_IAM_POLICY_MAP.service_accounts)를 각각 조회해서
+    # S3/SecretManager 과잉권한(전원 미보유) + KMS(SERVICE_IAM_KMS_CHECK_ENABLED일 때만,
+    # auth-service만 SERVICE_IAM_KMS_ALLOWED_ACTIONS 보유·나머지는 미보유)를 대조한다.
     if config.SERVICE_IAM_POLICY_MAP is None:
         return [make_result("2.3", "기타 서비스 정책 관리", "SKIP",
                              "서비스별 IAM 정책 매핑(config.SERVICE_IAM_POLICY_MAP) 미확정")]
 
-    sa_conf = config.SERVICE_IAM_POLICY_MAP["backend_service_account"]
-    role_arn, lookup_detail = None, None
+    namespace = config.SERVICE_IAM_POLICY_MAP["namespace"]
+    service_accounts = config.SERVICE_IAM_POLICY_MAP["service_accounts"]
+
+    core_v1, lookup_err = None, None
     for cluster_name in cluster_names:
         core_v1, err = _load_core_v1(cluster_name)
-        if err:
-            lookup_detail = f"[{cluster_name}] {err}"
-            continue
-        sa, serr = safe_call(
-            core_v1.read_namespaced_service_account,
-            name=sa_conf["name"],
-            namespace=sa_conf["namespace"],
-        )
+        if not err:
+            lookup_err = None
+            break
+        lookup_err = f"[{cluster_name}] {err}"
+
+    if core_v1 is None:
+        return [make_result("2.3", "기타 서비스 정책 관리", "SKIP",
+                             f"K8s API 조회 실패로 판정 불가: {lookup_err}")]
+
+    allowed_kms_actions = set(config.SERVICE_IAM_KMS_ALLOWED_ACTIONS)
+    violations = []
+    checked = 0
+    for service_name, sa_name in service_accounts.items():
+        sa, serr = safe_call(core_v1.read_namespaced_service_account, name=sa_name, namespace=namespace)
         if serr:
-            lookup_detail = f"[{cluster_name}] {sa_conf['name']} ServiceAccount 조회 실패: {serr}"
+            violations.append(f"{service_name}({sa_name}) ServiceAccount 조회 실패: {serr}")
             continue
         role_arn = (sa.metadata.annotations or {}).get("eks.amazonaws.com/role-arn")
-        lookup_detail = None
-        break
+        if not role_arn:
+            violations.append(f"{service_name}({sa_name}) IRSA role-arn annotation 없음")
+            continue
+        role_name = role_arn.rsplit("/", 1)[-1]
+        actual_actions, aerr = _role_granted_actions(iam, role_name)
+        if aerr:
+            violations.append(f"{service_name} role={role_name} 정책 조회 실패: {aerr}")
+            continue
+        checked += 1
 
-    if lookup_detail:
+        forbidden = {a for a in actual_actions if a.split(":", 1)[0] in ("s3", "secretsmanager")}
+        if forbidden:
+            violations.append(f"{service_name} S3/SecretManager 과잉 권한: {_fmt_set(forbidden)}")
+
+        if config.SERVICE_IAM_KMS_CHECK_ENABLED:
+            kms_actions = {a for a in actual_actions if a.split(":", 1)[0] == "kms"}
+            is_kms_allowed_service = service_name in config.SERVICE_IAM_KMS_ALLOWED_SERVICES
+            allowed_here = allowed_kms_actions if is_kms_allowed_service else set()
+            excess_kms = kms_actions - allowed_here
+            if excess_kms:
+                violations.append(f"{service_name} KMS 과잉 권한: {_fmt_set(excess_kms)}")
+            if is_kms_allowed_service and not (kms_actions & allowed_kms_actions):
+                violations.append(f"{service_name} 필요 KMS 권한 미보유(기준: {_fmt_set(allowed_kms_actions)})")
+
+    if checked == 0:
         return [make_result("2.3", "기타 서비스 정책 관리", "SKIP",
-                             f"backend-common-sa 조회 실패로 판정 불가: {lookup_detail}")]
+                             "서비스별 ServiceAccount/IRSA 조회 전부 실패 — " + "; ".join(violations))]
 
-    if role_arn is None:
-        detail = (
-            f"{sa_conf['name']}(백엔드 8개 서비스 공유)에 IRSA(eks.amazonaws.com/role-arn) "
-            "바인딩 없음 — S3/SecretManager 권한 미보유는 baseline 충족(PASS). KMS는 auth-service만 "
-            "보유해야 하나 IRSA 자체가 없어 실제 구현 여부 확인 불가, 별도 확인요청 전달됨"
-        )
-        return [make_result("2.3", "기타 서비스 정책 관리", "PASS", detail)]
-
-    role_name = role_arn.rsplit("/", 1)[-1]
-    actual_actions, aerr = _role_granted_actions(iam, role_name)
-    if aerr:
-        return [make_result("2.3", "기타 서비스 정책 관리", "SKIP", f"role={role_name} 정책 조회 실패: {aerr}")]
-
-    forbidden = {a for a in actual_actions if a.split(":", 1)[0] in ("s3", "secretsmanager")}
-    status = "FAIL" if forbidden else "PASS"
+    status = "PASS" if not violations else "FAIL"
+    kms_note = "KMS 포함 대조" if config.SERVICE_IAM_KMS_CHECK_ENABLED else "KMS는 판정 제외(SERVICE_IAM_KMS_CHECK_ENABLED=False)"
     detail = (
-        f"{sa_conf['name']} IRSA role={role_name} — S3/SecretManager 과잉 권한: "
-        f"{_fmt_set(forbidden) if forbidden else '없음'} (8개 서비스 공유 SA라 baseline은 전원 미보유). "
-        "KMS는 구조적 문제로 판정 제외(SERVICE_IAM_KMS_CHECK_ENABLED=False, 확인요청 전달됨)"
+        f"서비스별 전용 SA {checked}/{len(service_accounts)}개 조회 — "
+        + ("위반 없음" if not violations else "; ".join(violations))
+        + f" ({kms_note})"
     )
     return [make_result("2.3", "기타 서비스 정책 관리", status, detail)]
 

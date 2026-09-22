@@ -99,6 +99,10 @@ u23_allowed_suid_sgid:
   - /usr/bin/umount
   - /usr/bin/pkexec
   - /usr/libexec/openssh/ssh-keysign   # Amazon Linux 2023 경로 (Ubuntu는 /usr/lib/openssh/ssh-keysign)
+  - /usr/bin/at        # AL2023 표준 바이너리(at 패키지) — 2026-09-21 파일럿 실측 확인
+  - /usr/bin/chage     # AL2023 표준 바이너리(shadow-utils) — 2026-09-21 파일럿 실측 확인
+  - /usr/bin/write     # AL2023 표준 바이너리(util-linux) — 2026-09-21 파일럿 실측 확인
+  - /usr/bin/screen    # AL2023 표준 바이너리(screen 패키지) — 2026-09-21 파일럿 실측 확인
 
 # -----------------------------------------------------------------------------
 # U-24 : 사용자 환경 파일 보호 [자동판정가능]
@@ -129,11 +133,140 @@ u25_world_writable_exclude_dirs:
   - /run
 
 # -----------------------------------------------------------------------------
-# U-26 : 중요 디바이스 파일 보호 [방법론만 확정 — 값은 파일럿 시 스냅샷 추출]
-#   판정 로직: 파일럿 VM에서 정상 /dev 스냅샷을 떠서 이후 diff. mqueue/shm 제외.
-#   u26_dev_baseline_snapshot 이 비어있으면 이 항목은 SKIP.
+# U-26 : 중요 디바이스 파일 보호 [확정 — 2026-09-22 인프라팀 원본 스냅샷 수신]
+#   판정 로직: 정상 노드(ip-10-0-16-179) /dev 문자·블록 디바이스 노드 재귀 스냅샷과
+#   diff. mqueue/shm 하위는 제외(find로 재귀 조회, roles/file_permission/tasks/main.yml
+#   참고). u26_dev_baseline_snapshot 이 비어있으면 이 항목은 SKIP.
 # -----------------------------------------------------------------------------
-u26_dev_baseline_snapshot: []   # TODO: 파일럿 VM에서 `ls /dev` 결과로 채울 것
+u26_dev_baseline_snapshot:
+  - "/dev/autofs"
+  - "/dev/btrfs-control"
+  - "/dev/console"
+  - "/dev/cpu_dma_latency"
+  - "/dev/cuse"
+  - "/dev/dma_heap/system"
+  - "/dev/full"
+  - "/dev/fuse"
+  - "/dev/gpiochip0"
+  - "/dev/input/event0"
+  - "/dev/input/event1"
+  - "/dev/kmsg"
+  - "/dev/loop-control"
+  - "/dev/mapper/control"
+  - "/dev/net/tun"
+  - "/dev/ng0n1"
+  - "/dev/ng1n1"
+  - "/dev/null"
+  - "/dev/nvme0"
+  - "/dev/nvme1"
+  - "/dev/ppp"
+  - "/dev/ptmx"
+  - "/dev/pts/0"
+  - "/dev/pts/1"
+  - "/dev/pts/ptmx"
+  - "/dev/random"
+  - "/dev/rtc0"
+  - "/dev/snapshot"
+  - "/dev/tty"
+  - "/dev/tty0"
+  - "/dev/tty1"
+  - "/dev/tty10"
+  - "/dev/tty11"
+  - "/dev/tty12"
+  - "/dev/tty13"
+  - "/dev/tty14"
+  - "/dev/tty15"
+  - "/dev/tty16"
+  - "/dev/tty17"
+  - "/dev/tty18"
+  - "/dev/tty19"
+  - "/dev/tty2"
+  - "/dev/tty20"
+  - "/dev/tty21"
+  - "/dev/tty22"
+  - "/dev/tty23"
+  - "/dev/tty24"
+  - "/dev/tty25"
+  - "/dev/tty26"
+  - "/dev/tty27"
+  - "/dev/tty28"
+  - "/dev/tty29"
+  - "/dev/tty3"
+  - "/dev/tty30"
+  - "/dev/tty31"
+  - "/dev/tty32"
+  - "/dev/tty33"
+  - "/dev/tty34"
+  - "/dev/tty35"
+  - "/dev/tty36"
+  - "/dev/tty37"
+  - "/dev/tty38"
+  - "/dev/tty39"
+  - "/dev/tty4"
+  - "/dev/tty40"
+  - "/dev/tty41"
+  - "/dev/tty42"
+  - "/dev/tty43"
+  - "/dev/tty44"
+  - "/dev/tty45"
+  - "/dev/tty46"
+  - "/dev/tty47"
+  - "/dev/tty48"
+  - "/dev/tty49"
+  - "/dev/tty5"
+  - "/dev/tty50"
+  - "/dev/tty51"
+  - "/dev/tty52"
+  - "/dev/tty53"
+  - "/dev/tty54"
+  - "/dev/tty55"
+  - "/dev/tty56"
+  - "/dev/tty57"
+  - "/dev/tty58"
+  - "/dev/tty59"
+  - "/dev/tty6"
+  - "/dev/tty60"
+  - "/dev/tty61"
+  - "/dev/tty62"
+  - "/dev/tty63"
+  - "/dev/tty7"
+  - "/dev/tty8"
+  - "/dev/tty9"
+  - "/dev/ttyS0"
+  - "/dev/ttyS1"
+  - "/dev/ttyS2"
+  - "/dev/ttyS3"
+  - "/dev/uhid"
+  - "/dev/uinput"
+  - "/dev/urandom"
+  - "/dev/userfaultfd"
+  - "/dev/vcs"
+  - "/dev/vcs1"
+  - "/dev/vcs2"
+  - "/dev/vcs3"
+  - "/dev/vcs4"
+  - "/dev/vcs5"
+  - "/dev/vcs6"
+  - "/dev/vcsa"
+  - "/dev/vcsa1"
+  - "/dev/vcsa2"
+  - "/dev/vcsa3"
+  - "/dev/vcsa4"
+  - "/dev/vcsa5"
+  - "/dev/vcsa6"
+  - "/dev/vcsu"
+  - "/dev/vcsu1"
+  - "/dev/vcsu2"
+  - "/dev/vcsu3"
+  - "/dev/vcsu4"
+  - "/dev/vcsu5"
+  - "/dev/vcsu6"
+  - "/dev/vfio/vfio"
+  - "/dev/vga_arbiter"
+  - "/dev/vhost-net"
+  - "/dev/vhost-vsock"
+  - "/dev/vmclock0"
+  - "/dev/zero"
 u26_dev_exclude_dirs:
   - mqueue
   - shm
@@ -166,6 +299,8 @@ u31_os_baseline_hidden_entries:
   - .kube
   - .ansible   # Ansible 자체가 모듈 실행용으로 원격 홈 디렉터리에 항상 생성(연결방식 무관, 로컬 VM
               # 테스트(SSH)에서 실측 확인) — SSM 연결도 동일하게 생성하므로 운영에서도 필수 제외 항목
+  - .gnupg     # Amazon EC2 EFA 드라이버 서명 검증용 공식 GPG 키링(EC2 초기화 시 자동 생성,
+              # 권한 700 확인됨) — 인프라팀 확인 완료(2026-09-22)
 
 # -----------------------------------------------------------------------------
 # U-33 : 불필요한 파일 제거 [N/A 확정 — 2026-09-13 인프라팀 노션 회신]
@@ -280,11 +415,14 @@ u65_ntp_allowed_servers: ["169.254.169.123"]
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
-# D-26 : 데이터베이스 감사 기록 보관기간 [2026-09-10 재분류: 제외 → 자동판정가능(부분)]
-#   구체적 조회 방법(감사로그 테이블 위치 등)은 DB 구축 완료 후 D-17과 함께 별도 설계 예정.
-#   지금은 U-66과 동일한 로그그룹 보관기간 조회 로직만 우선 코드화(roles/dbms_common/tasks/main.yml).
+# D-26 : 데이터베이스 감사 기록 보관기간
+#   [2026-09-22 인프라팀 확정] DB 엔진 DML 감사로그(pgaudit/MySQL Audit Plugin)는 I/O 부하·
+#   스토리지 비용 문제로 CloudWatch 연동 파이프라인 자체가 없음이 확인됨(EKS 컨트롤 플레인
+#   감사로그 /aws/eks/test-eks/cluster는 K8s API 감사이지 DB 감사가 아니라 무관) — "기준값
+#   미확정"이 아니라 "미구현 상태 확인"이므로 U-66과 동일 원칙으로 SKIP 아닌 FAIL 처리.
 # -----------------------------------------------------------------------------
-d26_audit_log_group_name: null   # TODO: 확인요청 표 17번 — DB 감사로그 저장 로그그룹명. null이면 SKIP
+d26_audit_not_implemented: true   # 구현 확인되면 false로 전환(그때부터 아래 로그그룹명으로 실측)
+d26_audit_log_group_name: null   # 구현 후 DB 감사로그 전용 로그그룹명으로 채울 것
 
 # -----------------------------------------------------------------------------
 # 서비스별 DB 계정/DB명/NetworkPolicy 라벨 매핑 [확정 — 2026-09-13 인프라팀 노션 회신]
@@ -343,11 +481,20 @@ d02_unnecessary_account_whitelist:
   - scm_service
 
 # -----------------------------------------------------------------------------
-# D-03 : 비밀번호 사용기간·복잡도 [확정 — 2026-09-10 인프라팀 회신]
+# D-03 : 비밀번호 사용기간·복잡도 [확정 — 2026-09-10 인프라팀 회신(값), 2026-09-22
+#   DBA 협의로 적용대상 재조정: 서비스 계정은 자동 로테이션 인프라 없이 강제 만료 시
+#   장애 위험이 커 정책 적용대상에서 제외(N/A) — 대신 이 정책 전용 유저 계정을 신규로
+#   만들어 그 계정에만 적용하기로 확정. 계정 자체가 아직 미생성 상태라
+#   d03_user_accounts는 비워둠(값 채워지기 전까지 "전용 유저 계정" 판정은 FAIL —
+#   기준값 미확정이 아니라 미구현 상태 확인이므로 U-66/D-26과 동일 원칙으로 SKIP
+#   아닌 FAIL. roles/dbms_common/tasks/{mysql,postgresql}.yml 참고).
 # -----------------------------------------------------------------------------
 d03_password_max_days: 90
 d03_password_min_length: 12
 d03_password_complexity_min_classes: 3   # 영문 대문자·소문자·숫자·특수문자 중 3종류 이상 조합
+d03_user_accounts:
+  mysql: []        # TODO: 인프라팀이 생성할 전용 유저 계정명 목록(MySQL)
+  postgresql: []    # TODO: 인프라팀이 생성할 전용 유저 계정명 목록(PostgreSQL)
 
 # -----------------------------------------------------------------------------
 # D-04 : 관리자 권한 최소 인원 [확정 — 2026-09-13 인프라팀 노션 회신]
@@ -375,12 +522,10 @@ d05_password_reuse_limit: 3
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
-# D-17 : Audit Table 접근 제한 [화이트리스트만 확정 — 2026-09-14 인프라팀 회신, 코드 미연동]
-#   PostgreSQL 관리자 화이트리스트는 D-04/D-06과 동일(postgres)로 확정됐으나, 실제
-#   "Audit Table"의 위치/존재 여부는 아직 회신 없음(DB 구축 후 별도 확인 예정 — D-26 참고).
-#   테이블이 특정되기 전까지는 이 변수를 참조하는 판정 로직이 없다 — postgresql.yml의
-#   D-17은 여전히 pgAudit 확장 로드 여부만으로 판정(변경 없음). 테이블 위치 확인되면
-#   그 테이블에 대한 GRANT 조회 후 이 화이트리스트로 대조하는 로직 추가 필요.
+# D-17 : Audit Table 접근 제한 [확정 — pgAudit 확장 로드 여부로 최종 판정]
+#   PostgreSQL 관리자 화이트리스트는 D-04/D-06과 동일(postgres). D-26 확인으로 별도
+#   "Audit Table" 파이프라인 자체가 없는 게 확정돼 GRANT 기반 대조로 교체할 계획은
+#   접고, postgresql.yml의 pgAudit 확장 로드 여부 판정을 최종 형태로 유지한다.
 #   MySQL은 1차 점검 스코프 제외(pgAudit이 PostgreSQL 전용) — mysql.yml D-17 SKIP 처리.
 # -----------------------------------------------------------------------------
 d17_admin_account_whitelist:
@@ -602,18 +747,14 @@ svc01_allowed_service_calls:
 #     발행/구독 주체를 구분할 수 없는 상태가 여전히 유효(§2.3 backend-common-sa IRSA
 #     공유 문제와 동일 패턴). authz09_shared_account_blocks_check는 계정이 실제로
 #     분리됐다는 인프라팀 회신이 오기 전까지 true 유지.
-authz09_shared_account_blocks_check: true    # true인 동안 판정 항상 SKIP — 인프라팀이 WMS/OMS 계정을 실제로 분리해주면 false로 전환
-# 2026-09-18 인프라팀 회신(16번): RabbitMQ는 EKS 내 3-node Pod, Management API는 HTTPS 15671
-# (15672 아님) 사용. 현재 ClusterIP 구성이라 mgmt 서버에서 직접 접근 불가 — 접근 경로 구성 필요(작업 중).
-authz09_rabbitmq_management_url: null        # 예: "https://rabbitmq.backend.svc.cluster.local:15671" — 접근 경로 구성 후 값 확정 예정(16번)
-authz09_rabbitmq_readonly_user_secret: null  # 조회 전용 계정 K8s Secret 이름(네임스페이스는 authz_backend_namespace) — 16번 해결 후 발급 예정(17번)
+authz09_shared_account_blocks_check: true    # true인 동안 판정 FAIL 고정 — 인프라팀이 WMS/OMS 계정을 실제로 분리해주면 false로 전환
+authz09_rabbitmq_management_url: null        # 예: "https://rabbitmq.messaging.svc.cluster.local:15671" — mgmt 서버 상시 접근 경로 구성 후 값 확정 예정
+authz09_rabbitmq_readonly_user_secret: null  # 조회 전용 계정 K8s Secret 이름(네임스페이스는 authz_backend_namespace) — 계정 분리 후 발급 예정
 authz09_rabbitmq_vhost: "total-prod"              # 2026-09-17 인프라팀 정정 확정(BE팀 최초 답변 "/" 은 착오)
 authz09_rabbitmq_exchange: "wms.topic.exchange"   # 2026-09-17 BE팀 확정, topic 타입
 authz09_rabbitmq_routing_key: "wms.return.inspected"  # 2026-09-17 BE팀 확정
-# exchange가 이 이벤트 전용인지(true → exchange 단위 write/read만 대조) 공용인지
-# (false → topic permission의 routing key 제한까지 대조) — 확인되면 값 채울 것(TODO)
-authz09_rabbitmq_exchange_dedicated: null
-authz09_rabbitmq_oms_queue: null              # TODO: OMS가 구독하는 큐 이름 — 인프라팀이 BE팀에 확인 중
+authz09_rabbitmq_exchange_dedicated: false  # 2026-09-22 BE팀 확정 — 범용 exchange 목적, 현재는 단일 이벤트만 연결 — routing key 단위 점검 필요
+authz09_rabbitmq_oms_queue: "oms.wms-inspected.queue"  # 2026-09-22 BE팀 시퀀스 다이어그램(Notion) 근거 — 실배포 여부는 미확인, 대조 전제로만 반영
 authz09_rabbitmq_publisher_allowed: ["wms-service"]
 authz09_rabbitmq_consumer_allowed: ["oms-service"]    # 2026-09-17 BE팀 확정 — payment-service는 1차 회신 오기였음
 # 2026-09-17 인프라팀 착수 확인(17-1) — WMS/OMS 계정을 실제로 분리하면 그 RabbitMQ

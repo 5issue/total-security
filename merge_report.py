@@ -4,8 +4,8 @@
 실행 예시:
     python3 merge_report.py --round "1차" --date 20260914
 
-claude_code_handoff_spec.md 4.1~4.6절 스펙대로 시트 4개(요약/서버/DBMS/클라우드)를
-구성한 최종 결과물을 만든다. 이 파일이 SHA-256 해시와 함께 보안팀에 전달되는 결과물이다.
+시트 5개(요약/서버/DBMS/클라우드/인증_인가)로 구성한 최종 결과물을 만든다.
+이 파일이 SHA-256 해시와 함께 보안팀에 전달되는 결과물이다.
 """
 import argparse
 from datetime import datetime

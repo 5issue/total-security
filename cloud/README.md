@@ -57,5 +57,4 @@ SecretManager)도 2026-09-17 baseline 확정으로 코드화 완료됐다. 아�
 
 | 항목 | 이유 |
 |---|---|
-| 2.3(KMS 부분만) | S3/SecretManager는 2026-09-17 코드화 완료(`eks_checks.check_2_3_service_policies`). KMS는 baseline은 확정(auth-service만 kms:Sign/GetPublicKey)이나, backend 8개 서비스가 IRSA 없는 ServiceAccount(`backend-common-sa`) 하나를 공유하는 구조라 "auth만 KMS 보유"를 만족시킬 방법이 없음 — 인프라팀에 확인요청 전달, `config.SERVICE_IAM_KMS_CHECK_ENABLED=False`로 판정 제외 중 |
-| 1.8 | AWS Config Rule(`access-keys-rotated`)이 대상 계정에 배포돼 있어야 정상 판정 |
+| 2.3 | 2026-09-22 인프라팀이 `backend-common-sa` 공유 구조를 폐기하고 서비스별 전용 SA(`auth-sa`, `oms-sa` 등)로 분리 완료 — `check_2_3_service_policies`를 서비스별 순회 방식으로 재작성, S3/SecretManager·KMS(auth-service만 kms:Sign/GetPublicKey) 전부 실측 대조로 전환(`SERVICE_IAM_KMS_CHECK_ENABLED=True`). IRSA 분리가 실제로 완전히 적용됐는지만 인프라팀 확인 대기 중 |
