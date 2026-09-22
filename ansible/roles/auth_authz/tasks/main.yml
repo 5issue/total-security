@@ -82,22 +82,41 @@
 #   exchange가 이 이벤트 전용이면(authz09_rabbitmq_exchange_dedicated: true) exchange
 #   단위 write/read만 대조, 공용이면 topic permission(routing key 제한)도 같이 대조할 것.
 # -----------------------------------------------------------------------------
-- name: "AUTHZ-09 | 판정 기록(RabbitMQ 접근정보 미확정 또는 계정 미분리 — FAIL)"
+- name: "AUTHZ-09 | 접근정보 충족 여부 확인"
+  # authz09_info_missing은 아래 여러 태스크(SKIP 판정, 실측 준비 여부, 미확정 FAIL)에서
+  # 공통으로 참조되는 값이라 task-scoped vars가 아닌 set_fact로 한 번만 계산해 둔다
+  # (vars는 해당 태스크 밖으로 안 넘어가서 authz09_shared_account_blocks_check가 false로
+  # 바뀌는 순간 하위 태스크에서 undefined 에러가 나는 걸 WSL 테스트로 확인해 여기서 고침).
+  ansible.builtin.set_fact:
+    authz09_info_missing: "{{ (authz09_rabbitmq_management_url is none) or (authz09_rabbitmq_readonly_user_secret is none) }}"
+
+- name: "AUTHZ-09 | 판정 기록(계정 미분리 — 실제 결함, FAIL)"
   # 2026-09-22 확정: 메시징 계약(routing key/큐/exchange)은 이미 확정 전달됐고 남은 건
   # 인프라팀의 계정 분리 실행뿐이라 "값을 몰라서"가 아니라 "미구현 상태 확인"에 해당 —
-  # D-26/U-66과 동일 원칙으로 SKIP 대신 FAIL, 분리 완료 회신 오면 값 채워서 전환.
-  vars:
-    authz09_info_missing: "{{ (authz09_rabbitmq_management_url is none) or (authz09_rabbitmq_readonly_user_secret is none) }}"
+  # D-26/U-66과 동일 원칙으로 SKIP 대신 FAIL(계정 공유 = 지금 실제로 존재하는 결함).
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'AUTHZ-09', 'item': 'WMS→OMS 반품검수 비동기 이벤트(wms.return.inspected) 발행/구독 권한', 'target': 'rabbitmq',
       'status': 'FAIL',
-      'detail': (
-        '서비스별 RabbitMQ 계정이 아직 분리 안 됨(공통 계정 공유) — 메시징 계약(routing key/큐/exchange)은 확정 전달 완료, 인프라팀의 WMS/OMS 계정 분리 실행만 남음. 분리 전까지는 권한 조회로 발행/구독 주체 구분 불가' if not authz09_info_missing
-        else 'RabbitMQ Management API 접근정보·조회 전용 계정 미확정 — 인프라점검_확인요청_트래킹.md 참고'
-      )
+      'detail': '서비스별 RabbitMQ 계정이 아직 분리 안 됨(공통 계정 공유) — 메시징 계약(routing key/큐/exchange)은 확정 전달 완료, 인프라팀의 WMS/OMS 계정 분리 실행만 남음. 분리 전까지는 권한 조회로 발행/구독 주체 구분 불가'
     }] }}"
-  when: authz09_shared_account_blocks_check or authz09_info_missing
+  when: authz09_shared_account_blocks_check
+
+- name: "AUTHZ-09 | 판정 기록(계정 분리됐으나 자동 검증 구조적 불가 — SKIP)"
+  # 2026-09-22 인프라팀 확정 회신: Management API가 ClusterIP 전용이라 mgmt 서버 상시
+  # 접근 경로 자체가 구성 불가(네트워크·TLS·GitOps 전반 영향, 현재 일정상 불가 판단).
+  # 최소권한(monitoring 태그)도 RabbitMQ 구조상 사용자/권한 조회를 지원하지 않아 불가능.
+  # "값을 아직 못 받아서"가 아니라 "자동화 자체가 원천적으로 안 된다고 확정"된 것이라
+  # D-01(PostgreSQL, 1회성 점검 구조적 한계)과 동일 원칙으로 SKIP 고정 — 인프라팀이
+  # 계정 분리 반영 후 임시 관리자 계정 재발급하면 보안팀이 kubectl port-forward로
+  # 수동 확인하고, 그 결과는 이 자동화 리포트가 아니라 별도로 관리한다.
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'AUTHZ-09', 'item': 'WMS→OMS 반품검수 비동기 이벤트(wms.return.inspected) 발행/구독 권한', 'target': 'rabbitmq',
+      'status': 'SKIP',
+      'detail': 'RabbitMQ Management API 상시 접근 경로가 구조적으로 불가능하다고 인프라팀 확정(2026-09-22) — 자동 검증 대신 kubectl port-forward 기반 수동 확인으로 전환, 결과는 별도 관리'
+    }] }}"
+  when: (not authz09_shared_account_blocks_check) and authz09_info_missing
 
 # -----------------------------------------------------------------------------
 # AUTHZ-09 (실측) | 계정 분리·접근정보 확정 후 실제 RabbitMQ 권한 대조

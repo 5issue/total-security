@@ -52,19 +52,27 @@
     }] }}"
 
 # AUTHZ-09 | WMS→OMS 반품검수 wms.return.inspected 비동기 이벤트(RabbitMQ) 발행/구독 권한
-- name: "AUTHZ-09 | 판정 기록(RabbitMQ 접근정보 미확정 또는 계정 미분리 — FAIL)"
-  vars:
+- name: "AUTHZ-09 | 접근정보 충족 여부 확인"
+  ansible.builtin.set_fact:
     authz09_info_missing: "{{ (authz09_rabbitmq_management_url is none) or (authz09_rabbitmq_readonly_user_secret is none) }}"
+
+- name: "AUTHZ-09 | 판정 기록(계정 미분리 — FAIL)"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'AUTHZ-09', 'item': 'WMS→OMS 반품검수 비동기 이벤트(wms.return.inspected) 발행/구독 권한', 'target': 'rabbitmq',
       'status': 'FAIL',
-      'detail': (
-        '서비스별 RabbitMQ 계정이 아직 분리 안 됨(공통 계정 공유) — 메시징 계약(routing key/큐/exchange)은 확정 전달 완료, 인프라팀의 WMS/OMS 계정 분리 실행만 남음. 분리 전까지는 권한 조회로 발행/구독 주체 구분 불가' if not authz09_info_missing
-        else 'RabbitMQ Management API 접근정보·조회 전용 계정 미확정 — 인프라점검_확인요청_트래킹.md 참고'
-      )
+      'detail': '서비스별 RabbitMQ 계정이 아직 분리 안 됨(공통 계정 공유) — 메시징 계약(routing key/큐/exchange)은 확정 전달 완료, 인프라팀의 WMS/OMS 계정 분리 실행만 남음. 분리 전까지는 권한 조회로 발행/구독 주체 구분 불가'
     }] }}"
-  when: authz09_shared_account_blocks_check or authz09_info_missing
+  when: authz09_shared_account_blocks_check
+
+- name: "AUTHZ-09 | 판정 기록(계정 분리됐으나 자동 검증 구조적 불가 — SKIP)"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'AUTHZ-09', 'item': 'WMS→OMS 반품검수 비동기 이벤트(wms.return.inspected) 발행/구독 권한', 'target': 'rabbitmq',
+      'status': 'SKIP',
+      'detail': 'RabbitMQ Management API 상시 접근 경로가 구조적으로 불가능하다고 인프라팀 확정 — 자동 검증 대신 kubectl port-forward 기반 수동 확인으로 전환, 결과는 별도 관리'
+    }] }}"
+  when: (not authz09_shared_account_blocks_check) and authz09_info_missing
 
 # AUTHZ-09 (실측) | 계정 분리·접근정보 확정 후 실제 RabbitMQ 권한 대조
 - name: "AUTHZ-09 | 실측에 필요한 값 충족 여부 확인"
