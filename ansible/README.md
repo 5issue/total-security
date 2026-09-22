@@ -12,6 +12,7 @@
 | `roles/network_service` | U-34~61 계열(U-37,42 포함) | 서비스 활성화 여부 |
 | `roles/log_patch_check` | U-64(패치), U-66(로깅) | mgmt 서버 AWS CLI 조회(SSM/CloudWatch) — 2026-09-10 재분류(제외→자동판정가능(부분)) |
 | `roles/dbms_common` | D-01~26 중 코드화 대상 18개 | mysql.yml/postgresql.yml(SQL) + k8s_pod_checks.yml(D-07,10,14,25 파드/K8s) + log_patch_check 재사용(D-26) |
+| `roles/auth_authz` | AUTHZ-08, AUTHZ-09, SVC-01 | K8s NetworkPolicy 조회(`kubernetes.core.k8s_info`) — `인증_인가` 시트 |
 
 판정유형이 "제외"로 확정된 항목(U-62 / D-12,13,15,16,19,22,23,24)은 role에
 코드로 작성하지 않고, `scripts/build_server_dbms_xlsx.py`가 N/A 고정 행으로 삽입한다.
@@ -76,7 +77,7 @@ D-02,03,04,05,06,10,20,21 등은 전부 확정·자동판정가능으로 전환 
 
 | 항목 | 이유 |
 |---|---|
-| U-26 | `u26_dev_baseline_snapshot` 아직 빈 값(TODO) — 1차 점검 시 EKS 워커노드에서 직접 `ls /dev` 추출해 baseline으로 저장하기로 결정(인프라팀에 별도 요청 안 함) |
+| U-26 | `u26_dev_baseline_snapshot` 아직 빈 값(TODO) — 인프라팀에 정상 노드 `/dev` 원본 스냅샷(`dev_devices_baseline.txt`) 요청, 수신 대기 중 |
 | U-28 | 2026-09-20 인프라팀 회신으로 판정기준 재설계 완료 — IP 화이트리스트 대조가 아니라 SG 22번 인바운드 부재(SSM Session Manager 대체, 보완통제 인정) 기반 자동판정. `roles/file_permission/tasks/main.yml` U-28 참고, 별도 화이트리스트 변수 불필요 |
 | D-17 | MySQL은 1차 스코프 제외 확정(SKIP). PostgreSQL은 관리자 화이트리스트(`postgres`)까지 확정됐지만, 실제 "Audit Table"의 위치/존재 여부가 아직 회신 없음 — D-26과 함께 별도 확인 필요, 확인 전까지는 pgAudit 로드 여부로만 판정 |
 | U-64 | AMI 비교 방식·SSM 파라미터 경로 확정 완료 — `u64_nat_latest_ami_ssm_param`(NAT용, arm64 계열)은 kernel-default/minimal 확정이 100%는 아니라 1차 점검 시 `aws ssm get-parameter`로 실제 AMI ID와 대조 검증 권장 |

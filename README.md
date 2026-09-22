@@ -24,7 +24,7 @@ run_check.sh       전체 파이프라인 한 번에 실행(mgmt 서버 crontab 
                               |
                     [merge_report.py]
                               |
-        infra_check_{YYYYMMDD}_{회차}.xlsx (최종 산출물, 시트: 요약/서버/DBMS/클라우드)
+        infra_check_{YYYYMMDD}_{회차}.xlsx (최종 산출물, 시트: 요약/서버/DBMS/클라우드/인증_인가)
                               |
                     SHA-256 해시 생성 후 결과물과 함께 전달
 ```

@@ -13,6 +13,7 @@ AWS CLI/boto3 read-only API로 클라우드 시트(1.x~4.x, 41개 항목)를 점
 | `checks/logging_checks.py` | 4.4~4.8, 4.11~4.12 | 통신구간·CloudTrail·CloudWatch·VPC 플로우로그, 보관기간 |
 | `checks/elb_checks.py` | 3.10 | ALB 제어정책(리스너/SSL Policy/액세스로그/Deletion Protection/헬스체크/보안그룹/Cross-Zone) |
 | `checks/eks_checks.py` | 1.11~1.13, 2.1~2.3, 3.9, 4.14~4.15 | boto3 + kubernetes 파이썬 클라이언트(kubeconfig 필요). 인스턴스/네트워크/기타서비스 IAM 최소권한(2.1~2.3)이 전부 EKS 노드그룹·ALB IRSA·backend-common-sa IRSA 대조라 이 파일로 옮겨와 있음 — 2.2는 2026-09-20까지 VPC CNI IRSA 미분리가 구조적으로 확정된 사실이라 REVIEW 고정이었으나, 인프라팀이 분리를 구현 완료했다고 회신해 aws-node ServiceAccount의 IRSA annotation 실측 기반 PASS/REVIEW로 전환(ALB와 동일 패턴), 2.3은 KMS 부분이 구조적 문제(§하단 참고)로 판정 보류 중 |
+| `checks/auth_checks.py` | SVC-02, SVC-08, AUTHN-14 | `인증_인가` 시트 중 boto3로 조회 가능한 항목(K8s 기반 AUTHZ-08/09, SVC-01은 `ansible/roles/auth_authz`) |
 
 판정유형이 "제외"로 확정된 항목(4.13 백업)은 코드로 작성하지 않고 `cloud_check.py`가
 N/A 고정 행으로 삽입한다.
