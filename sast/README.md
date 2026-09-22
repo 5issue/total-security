@@ -460,6 +460,8 @@ Gradle 내부 cache와 build output은 `sast/.gitignore`에서 제외한다.
 
 STEP 28 benchmark의 case, ground truth, TP/FP/FN/TN 정의, complexity 분포와 현재 측정 결과는 [BENCHMARK.md](BENCHMARK.md)에 기록한다. 이 수치는 통제된 23개 fixture에만 해당하며 실제 프로젝트 전체의 정확도를 대표하지 않는다.
 
+AUTHN-06, AUTHN-11, SVC-05는 별도의 `policy-ground-truth.tsv`와 controlled policy fixture로 production `ProjectScanner` 통합 경로를 회귀 검증한다. 이 policy benchmark 결과는 STEP 28 vulnerability benchmark에 합산하지 않으며, 통제된 fixture에서의 regression quality만 나타낼 뿐 실제 software 또는 운영 환경의 일반 정확도를 의미하지 않는다.
+
 ## Java syntax tree 출력
 
 하나의 `.java` 파일을 parsing하고 node type, start/end position 및 선택적인 source text를 출력할 수 있다.
