@@ -21,9 +21,8 @@ from openpyxl import Workbook
 COLUMNS = ["항목ID", "항목명", "판정", "상세", "대상", "점검일시", "회차"]
 
 # 판정유형 "제외" 확정 항목 — 코드로 조회하지 않고 N/A 고정 행으로 삽입한다.
-EXCLUDED_SERVER_ITEMS = [
-    ("U-62", "로그인 시 경고 메시지 설정"),
-]
+# U-62는 실측 태스크로 전환 완료(file_permission role) — 더 이상 여기서 N/A 고정 안 함.
+EXCLUDED_SERVER_ITEMS = []
 EXCLUDED_DBMS_ITEMS = [
     ("D-12", "안전한 리스너 비밀번호 설정"),
     ("D-13", "불필요한 ODBC/OLE-DB 제거"),

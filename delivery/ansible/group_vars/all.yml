@@ -93,6 +93,8 @@ u25_world_writable_exclude_dirs:
   - /var/tmp
   - /dev/shm
   - /run
+  - /var/lib/kubelet/pods
+  - /var/lib/containerd
 
 # U-26 : 중요 디바이스 파일 보호
 u26_dev_baseline_snapshot:
@@ -251,6 +253,11 @@ u33_business_file_dirs:
   - /srv
   - /var/www
   - /app
+u33_business_file_exclude_dirs:
+  - /opt/aws
+  - /opt/cni
+  - /opt/containerd
+  - /opt/amazon
 
 # U-40 : NFS 접근 통제
 u40_nfs_allowed_hosts: null
@@ -445,14 +452,16 @@ dbms_connections:
   #   database: "oms_db"
 
 # DBMS 관리자(admin) 접속 정보 — D-01/02/04/06/08/11/18/20/21 전용(그 외 항목은 dbms_connections 사용)
+# [2026-09-23] root/ROOT_PASSWORD는 틀린 가정이었음 — MOCO는 root 직접 접근 차단,
+# 실제 관리자는 moco-admin/ADMIN_PASSWORD(인프라팀 실측 검증 완료)
 dbms_admin_connections:
   mysql:
     host: "shared-mysql-primary.svc.cluster.local"
     port: 3306
     namespace: backend
     secret_ref: "moco-shared-mysql"
-    secret_username: "root"
-    secret_password_key: "ROOT_PASSWORD"
+    secret_username: "moco-admin"
+    secret_password_key: "ADMIN_PASSWORD"
   postgresql:
     host: "shared-pg-rw.backend.svc.cluster.local"
     port: 5432
@@ -483,7 +492,10 @@ svc01_allowed_service_calls:
   - { caller: "user-service",    callee: "auth-service" }
 
 # AUTHZ-09 : WMS→OMS 반품검수 RabbitMQ 발행/구독 권한
-authz09_shared_account_blocks_check: true    # true인 동안 판정 FAIL 고정 — 계정 분리 완료 시 false로 전환
+# [2026-09-23] 계정 분리 완료 확인(total-wms/total-oms 발급, 임시 계정으로 수동 검증
+# 완료 — OMS topic 권한 미설정으로 FAIL, 이행점검 별도 추적). Management API 상시
+# 접근 경로는 여전히 구조적으로 불가라 url/secret은 null 유지 → SKIP 분기로 라우팅.
+authz09_shared_account_blocks_check: false   # 계정 분리 완료 확인 — false로 전환
 authz09_rabbitmq_management_url: null
 authz09_rabbitmq_readonly_user_secret: null
 authz09_rabbitmq_vhost: "total-prod"

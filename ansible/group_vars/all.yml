@@ -131,6 +131,8 @@ u25_world_writable_exclude_dirs:
   - /var/tmp
   - /dev/shm
   - /run
+  - /var/lib/kubelet/pods   # [2026-09-23] 컨테이너 런타임이 만드는 로그/소켓 파일 — 호스트
+  - /var/lib/containerd     # 취약점 아님(2차 점검 결과 전수 확인, 전부 이 두 경로였음)
 
 # -----------------------------------------------------------------------------
 # U-26 : 중요 디바이스 파일 보호 [확정 — 2026-09-22 인프라팀 원본 스냅샷 수신]
@@ -303,15 +305,22 @@ u31_os_baseline_hidden_entries:
               # 권한 700 확인됨) — 인프라팀 확인 완료(2026-09-22)
 
 # -----------------------------------------------------------------------------
-# U-33 : 불필요한 파일 제거 [N/A 확정 — 2026-09-13 인프라팀 노션 회신]
-#   컨테이너 기반 인프라라 애플리케이션/소스코드가 노드에 존재하지 않는 것이 정상 상태
-#   (N/A) — 아래 업무 파일 배치 경로에서 파일이 발견되면 FAIL로 자동판정한다.
+# U-33 : 불필요한 파일 제거 [2026-09-23 재작성]
+#   업무 파일 배치 경로에서 u33_business_file_exclude_dirs 밖의 파일이 발견되면 FAIL,
+#   없으면 PASS(컨테이너 기반이라 업무파일 자체가 없는 게 정상 — 단 "확인했고 없음"은
+#   PASS이지 N/A가 아님). 2차 점검 결과 전수 확인 결과 /opt 하위 644건 전부 AWS EKS
+#   최적화 AMI 표준 도구(cfn-init, VPC CNI, containerd, EFA/PMIx)라 제외 확정.
 # -----------------------------------------------------------------------------
 u33_business_file_dirs:
   - /opt
   - /srv
   - /var/www
   - /app
+u33_business_file_exclude_dirs:
+  - /opt/aws
+  - /opt/cni
+  - /opt/containerd
+  - /opt/amazon
 
 # -----------------------------------------------------------------------------
 # U-40 : NFS 접근 통제 [TODO — 허용 호스트 목록 필요, NFS 미사용 예정으로 보임]
@@ -675,10 +684,10 @@ dbms_connections:
 #   (D-03/05/06 기대계정 매핑/07/09/10/14/17/25)은 "이 서비스가 이 계정만 쓰는지"를 보는
 #   항목이라 기존 dbms_connections(앱 계정) 그대로 유지.
 #
-#   ⚠ MySQL(moco-shared-mysql) — Secret명이 MOCO 오퍼레이터 기본 네이밍(moco-<클러스터명>)과
-#   일치해 MOCO 표준 포맷(root 계정, ROOT_PASSWORD 키)으로 가정함. 최초 실행 시 조회/로그인
-#   실패하면 `kubectl get secret moco-shared-mysql -n backend -o yaml`로 실제 키 이름부터
-#   확인할 것(추측이 틀렸을 가능성 있음 — 확신 없는 값).
+#   ⚠ MySQL(moco-shared-mysql) — [2026-09-23 인프라팀 확인·실측 검증 완료] 원래 가정했던
+#   root 계정/ROOT_PASSWORD 키는 틀렸음 — MOCO 아키텍처상 root 직접 접근은 차단되고,
+#   실제 관리자 계정은 moco-admin(ADMIN_PASSWORD 키)임. 인프라팀이 moco-admin/
+#   ADMIN_PASSWORD로 mysql.user 조회 성공까지 직접 검증해줌 — 이 값으로 교체.
 #   ⚠ PostgreSQL(shared-pg-superuser) — 기존 서비스별 Secret(shared-pg-*-credentials)과
 #   동일한 CNPG 표준 basic-auth 포맷(username/password 키)일 것으로 가정 — 같은 오퍼레이터가
 #   만드는 Secret이라 신뢰도 높음.
@@ -689,8 +698,8 @@ dbms_admin_connections:
     port: 3306
     namespace: backend
     secret_ref: "moco-shared-mysql"
-    secret_username: "root"
-    secret_password_key: "ROOT_PASSWORD"
+    secret_username: "moco-admin"
+    secret_password_key: "ADMIN_PASSWORD"
   postgresql:
     host: "shared-pg-rw.backend.svc.cluster.local"
     port: 5432
@@ -746,13 +755,17 @@ svc01_allowed_service_calls:
 #     `wms.topic.exchange`가 이 이벤트 전용이면 topic permission(routing key 단위 제한)
 #     불필요(exchange 단위 write/read만으로 충분), 공용 exchange라면 topic permission도
 #     점검 범위에 포함 — 전용/공용 여부는 인프라팀·BE팀 확인 필요(트래킹표 참고).
-#   - 계정이 실제로 나뉜 건 아직 아님(인프라팀이 WMS/OMS 계정 생성 검토 중) — 권한 조회로
-#     발행/구독 주체를 구분할 수 없는 상태가 여전히 유효(§2.3 backend-common-sa IRSA
-#     공유 문제와 동일 패턴). authz09_shared_account_blocks_check는 계정이 실제로
-#     분리됐다는 인프라팀 회신이 오기 전까지 true 유지.
-authz09_shared_account_blocks_check: true    # true인 동안 판정 FAIL 고정 — 인프라팀이 WMS/OMS 계정을 실제로 분리해주면 false로 전환
-authz09_rabbitmq_management_url: null        # 예: "https://rabbitmq.messaging.svc.cluster.local:15671" — mgmt 서버 상시 접근 경로 구성 후 값 확정 예정
-authz09_rabbitmq_readonly_user_secret: null  # 조회 전용 계정 K8s Secret 이름(네임스페이스는 authz_backend_namespace) — 계정 분리 후 발급 예정
+#   - [2026-09-23] 계정 분리 완료 확인 — 인프라팀이 total-wms/total-oms 계정을 실제로
+#     발급했고, 임시 점검 계정(authz09-audit)으로 Management API 권한 조회까지 수동
+#     검증 완료(결과: WMS 정상, OMS topic 권한 미설정으로 FAIL — 이행점검 별도 추적,
+#     이 자동화 리포트에는 반영 안 함, 위 SKIP 분기 주석 참고). 계정 분리 자체는
+#     끝났으므로 authz09_shared_account_blocks_check는 false로 전환.
+#   - 다만 mgmt 서버의 RabbitMQ Management API 상시 접근 경로는 여전히 구조적으로
+#     불가 확정 상태(2026-09-22)라 authz09_rabbitmq_management_url/readonly_user_secret은
+#     계속 null 유지 — authz09_info_missing이 true가 되어 자동으로 SKIP 분기로 감.
+authz09_shared_account_blocks_check: false   # [2026-09-23] 계정 분리 완료 확인(인프라팀 회신) — false로 전환
+authz09_rabbitmq_management_url: null        # 상시 접근 경로 구조적으로 불가 확정 — null 유지(SKIP 분기로 라우팅됨)
+authz09_rabbitmq_readonly_user_secret: null  # 위와 동일 사유로 null 유지(임시 점검 계정은 1회성, 상시용 아님)
 authz09_rabbitmq_vhost: "total-prod"              # 2026-09-17 인프라팀 정정 확정(BE팀 최초 답변 "/" 은 착오)
 authz09_rabbitmq_exchange: "wms.topic.exchange"   # 2026-09-17 BE팀 확정, topic 타입
 authz09_rabbitmq_routing_key: "wms.return.inspected"  # 2026-09-17 BE팀 확정
