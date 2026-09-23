@@ -69,27 +69,47 @@
       'detail': 'r계열(rlogin/rsh/rexec) 활성 유닛 수: ' ~ (u36_raw.stdout | default('0') | trim)
     }] }}"
 
-# U-37 | crontab 설정파일 권한 설정
-- name: "U-37 | /etc/crontab 상태 조회"
-  ansible.builtin.stat:
-    path: /etc/crontab
-  register: u37_stat
+# U-37 | crontab 설정파일 권한 설정 (원문은 crontab+at 두 서비스 모두 요구 — 명령어
+# SUID/world-execute + cron/at 관련 파일 640 이하 두 갈래로 확인)
+- name: "U-37 | crontab/at 명령어 SUID·world-execute 여부 조회"
+  ansible.builtin.shell: "set -o pipefail && find /usr/bin/crontab /usr/bin/at -maxdepth 0 -type f \\( -perm -4000 -o -perm -0001 \\) 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u37_cmd_raw
+  changed_when: false
+  failed_when: false
 
-- name: "U-37 | cron.allow 상태 조회"
-  ansible.builtin.command: cat /etc/cron.allow
+- name: "U-37 | cron/at 관련 파일 권한 위반 조회(640 초과)"
+  ansible.builtin.shell: >
+    set -o pipefail &&
+    find /etc/crontab /etc/cron.d/* /etc/cron.allow /etc/cron.deny /etc/at.allow /etc/at.deny
+    /var/spool/cron/crontabs/* /var/spool/cron/atjobs/*
+    -maxdepth 0 -type f -perm /137 2>/dev/null
+  args:
+    executable: /bin/bash
+  register: u37_file_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-37 | cron.allow/deny, at.allow/deny 존재 여부 조회"
+  ansible.builtin.shell: "set -o pipefail && ls /etc/cron.allow /etc/cron.deny /etc/at.allow /etc/at.deny 2>/dev/null"
+  args:
+    executable: /bin/bash
   register: u37_allow_raw
   changed_when: false
   failed_when: false
 
 - name: "U-37 | 판정 기록"
   vars:
-    u37_perm_ok: "{{ not u37_stat.stat.exists or (u37_stat.stat.mode | int(base=8)) <= (u37_crontab_perm_max | int(base=8)) }}"
+    u37_cmd_violations: "{{ u37_cmd_raw.stdout_lines | default([]) }}"
+    u37_file_violations: "{{ u37_file_raw.stdout_lines | default([]) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-37', 'item': 'crontab 설정파일 권한 설정',
-      'status': 'PASS' if u37_perm_ok else 'FAIL',
-      'detail': ('/etc/crontab 없음' if not u37_stat.stat.exists else ('mode=' ~ u37_stat.stat.mode ~ ' (기준 <= ' ~ u37_crontab_perm_max ~ ')')) ~
-                ' / cron.allow: ' ~ (u37_allow_raw.stdout | default('없음(기본 전체허용 가능성, 참고 필요)', true) | trim)
+      'status': 'PASS' if (u37_cmd_violations | length == 0 and u37_file_violations | length == 0) else 'FAIL',
+      'detail': '명령어 SUID/world-execute 위반: ' ~ (u37_cmd_violations | join(', ') if u37_cmd_violations | length > 0 else '없음') ~
+                ' / 파일 권한(기준 <= ' ~ u37_crontab_perm_max ~ ') 위반: ' ~ (u37_file_violations | join(', ') if u37_file_violations | length > 0 else '없음') ~
+                ' | cron.allow/deny·at.allow/deny 존재: ' ~ (u37_allow_raw.stdout_lines | default([]) | join(', ') if u37_allow_raw.stdout_lines | default([]) | length > 0 else '없음(둘 다 없으면 root만 등록 가능 — 안전한 기본값, 원문 참고사항)')
     }] }}"
 
 # U-38 | DoS 공격에 취약한 서비스 비활성화 (echo/discard/daytime/chargen)

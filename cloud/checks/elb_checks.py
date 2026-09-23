@@ -6,6 +6,10 @@
 SECONDS) ⑥헬스체크(경로 /, 200-399, 기본값 15초/5초/2/2) ⑦ALB 보안그룹 443/80만
 허용 ⑧Cross-Zone Load Balancing 자동활성화.
 
+[2026-09-23] ⑨ WAF 연결 여부(원문 ELB.16) 추가 — AWS WAF 웹 ACL이 ALB에 연결돼
+있는지 실측. WAF는 인증인가 설계서상 "단계적 활성화"로 아직 미활성화 상태라 현재는
+FAIL로 잡히는 게 정상(활성화 완료 시 자동 PASS 전환).
+
 이 항목ID(3.10)는 분류표상 한 행이라, ALB/기준별 위반사항을 모아 하나의 PASS/FAIL로
 집계한다(개별 ALB 위반 내역은 상세 컬럼에 나열).
 """
@@ -35,7 +39,7 @@ def _http_code_covers_2xx_3xx(matcher_code: str) -> bool:
     return True
 
 
-def _check_alb(elbv2, ec2, lb):
+def _check_alb(elbv2, ec2, wafv2, lb):
     name = lb["LoadBalancerName"]
     arn = lb["LoadBalancerArn"]
     violations = []
@@ -114,10 +118,15 @@ def _check_alb(elbv2, ec2, lb):
     if _attr(attrs, "load_balancing.cross_zone.enabled") == "false":
         violations.append("Cross-Zone Load Balancing 비활성화")
 
+    # ⑨ WAF 연결 여부(ELB.16) — AWS WAF 웹 ACL이 ALB에 연결돼 있는지 확인
+    webacl_res, werr = safe_call(wafv2.get_web_acl_for_resource, ResourceArn=arn)
+    if werr or not (webacl_res or {}).get("WebACL"):
+        violations.append("WAF 웹 ACL 미연결")
+
     return violations, idle_note
 
 
-def check_3_10_elb_control_policy(elbv2, ec2):
+def check_3_10_elb_control_policy(elbv2, ec2, wafv2):
     lbs_res, err = safe_call(elbv2.describe_load_balancers)
     if err:
         return [make_result("3.10", "ELB(Elastic Load Balancing) 연결 관리", "SKIP", f"ELB 목록 조회 실패: {err}")]
@@ -132,16 +141,16 @@ def check_3_10_elb_control_policy(elbv2, ec2):
     all_violations = []
     idle_notes = []
     for lb in albs:
-        violations, idle_note = _check_alb(elbv2, ec2, lb)
+        violations, idle_note = _check_alb(elbv2, ec2, wafv2, lb)
         idle_notes.append(f"{lb['LoadBalancerName']}: {idle_note}")
         if violations:
             all_violations.append(f"{lb['LoadBalancerName']}: " + "; ".join(violations))
 
     status = "PASS" if not all_violations else "FAIL"
-    detail = ("확정 7개 항목 위반 없음" if not all_violations else " / ".join(all_violations))
+    detail = ("확정 9개 항목 위반 없음" if not all_violations else " / ".join(all_violations))
     detail += " | " + ", ".join(idle_notes)
     return [make_result("3.10", "ELB(Elastic Load Balancing) 연결 관리", status, detail)]
 
 
-def run_all(elbv2, ec2):
-    return check_3_10_elb_control_policy(elbv2, ec2)
+def run_all(elbv2, ec2, wafv2):
+    return check_3_10_elb_control_policy(elbv2, ec2, wafv2)

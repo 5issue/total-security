@@ -22,15 +22,16 @@
   when: dbms_admin_connections.postgresql.secret_ref is not none
   ignore_errors: true
 
-# D-01 | 기본 계정(postgres) 잠금·유효기간 상태 (SKIP 고정 — 1회성 점검으로 원본 비밀번호 변경 여부 확인 불가)
-- name: "{{ db_conn.service }} | D-01 postgres 계정 상태 조회(참고용)"
+# D-01 | 기본 계정(postgres) 잠금 상태 (원문 OR 조건 — 잠금만으로도 양호, rolcanlogin으로
+# MySQL account_locked와 동일 원칙 판정. 비밀번호 변경 여부는 두 엔진 다 검증 불가)
+- name: "{{ db_conn.service }} | D-01 postgres 계정 잠금 상태 조회"
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"
     login_port: "{{ db_conn.port }}"
     login_user: "{{ pg_admin_user }}"
     login_password: "{{ pg_admin_password }}"
     db: postgres
-    query: "SELECT rolcanlogin, rolvaliduntil FROM pg_roles WHERE rolname='postgres'"
+    query: "SELECT rolcanlogin FROM pg_roles WHERE rolname='postgres'"
   register: d01_raw
   failed_when: false
 
@@ -38,8 +39,8 @@
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-01', 'item': '기본 계정의 비밀번호, 정책 등을 변경하여 사용', 'target': db_conn.service,
-      'status': 'SKIP',
-      'detail': '1회성 점검으로는 원본 비밀번호 변경 여부 확인 불가(PostgreSQL은 해시만 저장, 구조적 한계) — 수동 확인 대상. 참고 — postgres 계정 상태: ' ~ (d01_raw.query_result | default([]) | string | truncate(150))
+      'status': 'PASS' if (d01_raw.query_result is defined and d01_raw.query_result[0].rolcanlogin == false) else 'FAIL',
+      'detail': '조회 실패' if d01_raw.query_result is not defined else ('rolcanlogin=' ~ d01_raw.query_result[0].rolcanlogin ~ ' (false=잠금 — 양호). 비밀번호 변경 여부는 해시 저장 구조상 1회성 점검 불가라 잠금 여부만으로 판정(MySQL account_locked와 동일 원칙)')
     }] }}"
 
 # D-02 | 불필요 계정 제거
@@ -278,7 +279,8 @@
       'detail': 'shared_preload_libraries=' ~ d17_libs ~ ' (pgAudit 미로드 시 감사기록 파이프라인 미구성으로 취약 판정)'
     }] }}"
 
-# D-18 | PUBLIC Role 권한 제한
+# D-18 | PUBLIC Role 권한 제한 (원문 대상 "...Cubrid 등"의 "등"에 PostgreSQL 포함 확정,
+#   PUBLIC 롤 개념이 원문 취지와 대응해 확장 적용 — 절대기준)
 - name: "{{ db_conn.service }} | D-18 PUBLIC 권한 전체 조회"
   community.postgresql.postgresql_query:
     login_host: "{{ db_conn.host }}"

@@ -83,28 +83,52 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-37 | crontab 설정파일 권한 설정
+# U-37 | crontab 설정파일 권한 설정 [2026-09-23 재작성 — 원문은 crontab과 at 두 서비스를
+#   모두 요구하는데 기존 코드는 /etc/crontab 파일 하나만 봤음(at 관련은 전부 누락).
+#   ① 명령어(crontab/at) SUID·world-execute 제거 여부 ② cron/at 관련 파일(640 이하:
+#   /etc/crontab, /etc/cron.d/*, cron.allow/deny, at.allow/deny, 사용자별 cron/at
+#   작업 목록) 권한 두 갈래로 확인. u37_crontab_perm_max(0640)에 대응하는 위반
+#   비트마스크(137 = owner-exec + group-write/exec + other-전체)로 판정(U-67과 동일 스타일).
 # -----------------------------------------------------------------------------
-- name: "U-37 | /etc/crontab 상태 조회"
-  ansible.builtin.stat:
-    path: /etc/crontab
-  register: u37_stat
+- name: "U-37 | crontab/at 명령어 SUID·world-execute 여부 조회"
+  ansible.builtin.shell: "set -o pipefail && find /usr/bin/crontab /usr/bin/at -maxdepth 0 -type f \\( -perm -4000 -o -perm -0001 \\) 2>/dev/null"
+  args:
+    executable: /bin/bash
+  register: u37_cmd_raw
+  changed_when: false
+  failed_when: false
 
-- name: "U-37 | cron.allow 상태 조회"
-  ansible.builtin.command: cat /etc/cron.allow
+- name: "U-37 | cron/at 관련 파일 권한 위반 조회(640 초과)"
+  ansible.builtin.shell: >
+    set -o pipefail &&
+    find /etc/crontab /etc/cron.d/* /etc/cron.allow /etc/cron.deny /etc/at.allow /etc/at.deny
+    /var/spool/cron/crontabs/* /var/spool/cron/atjobs/*
+    -maxdepth 0 -type f -perm /137 2>/dev/null
+  args:
+    executable: /bin/bash
+  register: u37_file_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-37 | cron.allow/deny, at.allow/deny 존재 여부 조회"
+  ansible.builtin.shell: "set -o pipefail && ls /etc/cron.allow /etc/cron.deny /etc/at.allow /etc/at.deny 2>/dev/null"
+  args:
+    executable: /bin/bash
   register: u37_allow_raw
   changed_when: false
   failed_when: false
 
 - name: "U-37 | 판정 기록"
   vars:
-    u37_perm_ok: "{{ not u37_stat.stat.exists or (u37_stat.stat.mode | int(base=8)) <= (u37_crontab_perm_max | int(base=8)) }}"
+    u37_cmd_violations: "{{ u37_cmd_raw.stdout_lines | default([]) }}"
+    u37_file_violations: "{{ u37_file_raw.stdout_lines | default([]) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-37', 'item': 'crontab 설정파일 권한 설정',
-      'status': 'PASS' if u37_perm_ok else 'FAIL',
-      'detail': ('/etc/crontab 없음' if not u37_stat.stat.exists else ('mode=' ~ u37_stat.stat.mode ~ ' (기준 <= ' ~ u37_crontab_perm_max ~ ')')) ~
-                ' / cron.allow: ' ~ (u37_allow_raw.stdout | default('없음(기본 전체허용 가능성, 참고 필요)', true) | trim)
+      'status': 'PASS' if (u37_cmd_violations | length == 0 and u37_file_violations | length == 0) else 'FAIL',
+      'detail': '명령어 SUID/world-execute 위반: ' ~ (u37_cmd_violations | join(', ') if u37_cmd_violations | length > 0 else '없음') ~
+                ' / 파일 권한(기준 <= ' ~ u37_crontab_perm_max ~ ') 위반: ' ~ (u37_file_violations | join(', ') if u37_file_violations | length > 0 else '없음') ~
+                ' | cron.allow/deny·at.allow/deny 존재: ' ~ (u37_allow_raw.stdout_lines | default([]) | join(', ') if u37_allow_raw.stdout_lines | default([]) | length > 0 else '없음(둘 다 없으면 root만 등록 가능 — 안전한 기본값, 원문 참고사항)')
     }] }}"
 
 # -----------------------------------------------------------------------------

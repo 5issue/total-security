@@ -94,6 +94,7 @@ def main():
     s3control = session.client("s3control")
     rds = session.client("rds")
     elbv2 = session.client("elbv2")
+    wafv2 = session.client("wafv2")
     logs = session.client("logs")
     cloudtrail = session.client("cloudtrail")
     eks = session.client("eks")
@@ -105,7 +106,7 @@ def main():
     results += network_checks.run_all(ec2)
     results += storage_checks.run_all(ec2, s3, s3control, rds, account_id)
     results += logging_checks.run_all(elbv2, logs, ec2, cloudtrail)
-    results += elb_checks.run_all(elbv2, ec2)
+    results += elb_checks.run_all(elbv2, ec2, wafv2)
 
     cluster_names, discovery_error = discover_eks_clusters(eks, args.eks_clusters)
     results += eks_checks.run_all(eks, iam, ec2, cluster_names, discovery_error)
