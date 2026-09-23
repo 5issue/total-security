@@ -443,23 +443,26 @@
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-31', 'item': '숨김 디렉터리 점검',
-      'status': 'FAIL' if u31_unauthorized | length > 0 else 'N/A',
+      'status': 'FAIL' if u31_unauthorized | length > 0 else 'PASS',
       'detail': (
         'OS/도구 표준 항목 외 숨김 디렉터리 발견: ' ~ (u31_unauthorized | join(', ')) if u31_unauthorized | length > 0
-        else '사용자 정의 숨김 디렉터리 없음(OS 기본 항목만 존재) — 컨테이너 기반 인프라 특성상 정상(N/A)'
+        else '사용자 정의 숨김 디렉터리 없음(OS 기본 항목만 존재) — 위반 없음 확인(2026-09-23: N/A→PASS 정정, 실제로 확인했고 없는 것이므로)'
       )
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-33 | 불필요한 파일 제거 [N/A 확정 — 2026-09-13 인프라팀 노션 회신]
-#   컨테이너 기반 인프라라 애플리케이션/소스코드가 노드에 존재하지 않는 것이 정상(N/A).
-#   업무 파일 배치 경로(u33_business_file_dirs)에서 파일이 발견되면 FAIL로 자동판정한다.
+# U-33 | 불필요한 파일 제거 [2026-09-23 재작성]
+#   u33_business_file_exclude_dirs(AWS EKS 최적화 AMI 표준 도구 — cfn-init/VPC CNI/
+#   containerd/EFA 등, 2차 점검 결과 전수 확인 완료) 밖에서 파일이 발견되면 FAIL,
+#   없으면 PASS(N/A 아님 — 실제로 확인했고 업무파일이 없는 것이므로).
 # -----------------------------------------------------------------------------
-- name: "U-33 | 업무 파일 배치 경로 조회"
+- name: "U-33 | 업무 파일 배치 경로 조회 (표준 도구 경로 제외)"
   ansible.builtin.shell: >
     set -o pipefail &&
     for d in {{ u33_business_file_dirs | join(' ') }}; do
-      [ -d "$d" ] && find "$d" -mindepth 1 2>/dev/null;
+      [ -d "$d" ] && find "$d" -mindepth 1
+        {% for e in u33_business_file_exclude_dirs %}-not -path "{{ e }}" -not -path "{{ e }}/*" {% endfor %}
+        2>/dev/null;
     done
   args:
     executable: /bin/bash
@@ -471,11 +474,44 @@
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-33', 'item': '불필요한 파일 제거',
-      'status': 'FAIL' if (u33_raw.stdout | default('') | length > 0) else 'N/A',
+      'status': 'FAIL' if (u33_raw.stdout | default('') | length > 0) else 'PASS',
       'detail': (
-        '업무 파일 배치 경로(' ~ (u33_business_file_dirs | join(', ')) ~ ')에서 파일 발견: ' ~ u33_raw.stdout if (u33_raw.stdout | default('') | length > 0)
-        else '업무 파일 배치 경로 전부 비어있음 — 컨테이너 기반 인프라 특성상 정상(N/A)'
+        '업무 파일 배치 경로(' ~ (u33_business_file_dirs | join(', ')) ~ ')에서 표준 도구 경로 밖 파일 발견: ' ~ u33_raw.stdout if (u33_raw.stdout | default('') | length > 0)
+        else '업무 파일 배치 경로 확인 — 표준 도구(' ~ (u33_business_file_exclude_dirs | join(', ')) ~ ') 외 파일 없음(위반 없음 확인)'
       )
+    }] }}"
+
+# -----------------------------------------------------------------------------
+# U-62 | 로그인 시 경고 메시지 설정 [2026-09-23 신규 구현 — 기존엔 항목 전체를 제외
+#   처리했으나 근거 불완전 확인됨]
+#   원문 대상은 "서버 및 Telnet/FTP/SMTP/DNS 서비스"이고 조치 사례가 [서버]/[Telnet]/
+#   [SSH] 세 갈래로 독립적으로 나뉜다. Telnet/FTP/SMTP/DNS는 이 인프라에서 미사용
+#   확정(U-40/45/47/49~57/59~61과 동일 근거)이라 그 갈래만 해당없음이 맞지만, [서버]
+#   갈래(/etc/motd, /etc/issue 배너)는 접속 방식(SSH든 SSM이든)과 무관하게 독립적으로
+#   적용되는 요건이라 SSH 미사용을 이유로 항목 전체를 같이 제외한 기존 처리는 근거가
+#   부족했음 — [서버] 갈래만 실측으로 전환.
+# -----------------------------------------------------------------------------
+- name: "U-62 | /etc/motd 내용 조회"
+  ansible.builtin.command: cat /etc/motd
+  register: u62_motd_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-62 | /etc/issue 내용 조회"
+  ansible.builtin.command: cat /etc/issue
+  register: u62_issue_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-62 | 판정 기록"
+  vars:
+    u62_motd: "{{ u62_motd_raw.stdout | default('') | trim }}"
+    u62_issue: "{{ u62_issue_raw.stdout | default('') | trim }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-62', 'item': '로그인 시 경고 메시지 설정',
+      'status': 'PASS' if (u62_motd | length > 0 or u62_issue | length > 0) else 'FAIL',
+      'detail': 'Telnet/FTP/SMTP/DNS는 미사용 확정(해당없음) — 원문 [서버] 갈래만 실측: /etc/motd=' ~ (u62_motd | truncate(80) if u62_motd | length > 0 else '없음(빈 파일 또는 미존재)') ~ ' / /etc/issue=' ~ (u62_issue | truncate(80) if u62_issue | length > 0 else '없음(빈 파일 또는 미존재)')
     }] }}"
 
 # -----------------------------------------------------------------------------

@@ -12,6 +12,12 @@
 cd ansible
 ansible-galaxy collection install -r requirements.yml
 
+# ⚠ 위 컬렉션 중 kubernetes.core는 별도로 파이썬 kubernetes 클라이언트 라이브러리가
+# 있어야 동작합니다(컬렉션 설치와는 별개). 이게 없으면 DBMS 점검의 K8s Secret 조회
+# 태스크가 전부 "No module named 'kubernetes'"로 실패하고 무시(ignoring)된 채
+# 넘어가서, 이후 DB 쿼리들이 빈 자격증명으로 전부 "조회 실패"가 됩니다.
+pip install kubernetes
+
 # 클라우드 점검용 파이썬 패키지 설치
 cd ../cloud
 pip install -r requirements.txt
@@ -82,7 +88,23 @@ sha256sum infra_check_20260914_1차.xlsx > infra_check_20260914_1차.xlsx.sha256
 - **다음 항목들은 스크립트 오류가 아니라 의도된 FAIL입니다** — 해당 기능이 아직 구현되지
   않은 게 확인된 상태라 SKIP 대신 FAIL로 정직하게 잡아두었습니다. 구현되면 저희가 값만
   바꿔서 다시 전달드립니다: **D-26**(DB 감사로그 CloudWatch 미연동), **AUTHZ-09**(WMS/OMS
-  RabbitMQ 계정 미분리).
+  RabbitMQ 계정 미분리), **D-03**(서비스 계정에 비밀번호 만료·복잡도 정책 미적용 —
+  전용 유저 계정 생성 전까지는 함께 FAIL로 표시됩니다), **D-17**(MySQL 감사 플러그인
+  미도입 — 오픈소스 후보는 있으나 보안·버전 지원 검토 중이라 도입 전까지 FAIL로
+  표시됩니다).
+- **AUTHZ-09는 계정 분리가 완료되면 FAIL이 아니라 SKIP으로 바뀝니다.** RabbitMQ
+  Management API 상시 접근 경로가 구조적으로 구성 불가하다고 확인해주신 내용을 반영해,
+  계정 분리 이후에는 자동 판정 대신 저희가 임시 관리자 계정 + `kubectl port-forward`로
+  수동 확인하는 방식으로 전환됩니다(리포트에는 SKIP과 사유만 표시).
+- **이번 전달분에서 `U-37`(crontab/at 권한), `D-01`(PostgreSQL 기본 계정 잠금),
+  `3.10`(WAF가 ALB에 연결됐는지) 판정 로직을 보완했습니다** — 기존엔 U-37이
+  `/etc/crontab` 파일 권한만 보고 at 서비스 관련(명령어 SUID, at 작업 파일 등)은
+  누락돼 있었고, D-01은 PostgreSQL 쪽이 판정 없이 SKIP 고정이었고, 3.10은 WAF 연결
+  여부 자체를 안 보고 있었습니다. 이번에 원문 기준대로 완전히 채워서 실측하도록
+  고쳤습니다 — **의도된 FAIL이 아니라 실제 값을 그대로 판정에 반영하는 항목들**이라,
+  WAF를 켜놓고 실행하시면 3.10은 정상적으로 PASS가 나올 겁니다. 이전 회차에 안 보이던
+  FAIL이 새로 나오더라도 스크립트 오류가 아니라 실제 서버 설정을 반영한 결과이니
+  참고 부탁드립니다.
 
 ## 4. 문제가 있을 때
 

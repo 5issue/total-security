@@ -381,19 +381,21 @@
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-31', 'item': '숨김 디렉터리 점검',
-      'status': 'FAIL' if u31_unauthorized | length > 0 else 'N/A',
+      'status': 'FAIL' if u31_unauthorized | length > 0 else 'PASS',
       'detail': (
         'OS/도구 표준 항목 외 숨김 디렉터리 발견: ' ~ (u31_unauthorized | join(', ')) if u31_unauthorized | length > 0
-        else '사용자 정의 숨김 디렉터리 없음(OS 기본 항목만 존재) — 컨테이너 기반 인프라 특성상 정상(N/A)'
+        else '사용자 정의 숨김 디렉터리 없음(OS 기본 항목만 존재) — 위반 없음 확인'
       )
     }] }}"
 
-# U-33 | 불필요한 파일 제거 (N/A 확정 — 업무 파일 배치 경로 발견 시 FAIL)
-- name: "U-33 | 업무 파일 배치 경로 조회"
+# U-33 | 불필요한 파일 제거 (표준 도구 경로 제외, 없으면 PASS)
+- name: "U-33 | 업무 파일 배치 경로 조회 (표준 도구 경로 제외)"
   ansible.builtin.shell: >
     set -o pipefail &&
     for d in {{ u33_business_file_dirs | join(' ') }}; do
-      [ -d "$d" ] && find "$d" -mindepth 1 2>/dev/null;
+      [ -d "$d" ] && find "$d" -mindepth 1
+        {% for e in u33_business_file_exclude_dirs %}-not -path "{{ e }}" -not -path "{{ e }}/*" {% endfor %}
+        2>/dev/null;
     done
   args:
     executable: /bin/bash
@@ -405,11 +407,35 @@
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-33', 'item': '불필요한 파일 제거',
-      'status': 'FAIL' if (u33_raw.stdout | default('') | length > 0) else 'N/A',
+      'status': 'FAIL' if (u33_raw.stdout | default('') | length > 0) else 'PASS',
       'detail': (
-        '업무 파일 배치 경로(' ~ (u33_business_file_dirs | join(', ')) ~ ')에서 파일 발견: ' ~ u33_raw.stdout if (u33_raw.stdout | default('') | length > 0)
-        else '업무 파일 배치 경로 전부 비어있음 — 컨테이너 기반 인프라 특성상 정상(N/A)'
+        '업무 파일 배치 경로(' ~ (u33_business_file_dirs | join(', ')) ~ ')에서 표준 도구 경로 밖 파일 발견: ' ~ u33_raw.stdout if (u33_raw.stdout | default('') | length > 0)
+        else '업무 파일 배치 경로 확인 — 표준 도구 외 파일 없음(위반 없음 확인)'
       )
+    }] }}"
+
+# U-62 | 로그인 시 경고 메시지 설정 (Telnet/FTP/SMTP/DNS 미사용 확정, [서버] 갈래만 실측)
+- name: "U-62 | /etc/motd 내용 조회"
+  ansible.builtin.command: cat /etc/motd
+  register: u62_motd_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-62 | /etc/issue 내용 조회"
+  ansible.builtin.command: cat /etc/issue
+  register: u62_issue_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-62 | 판정 기록"
+  vars:
+    u62_motd: "{{ u62_motd_raw.stdout | default('') | trim }}"
+    u62_issue: "{{ u62_issue_raw.stdout | default('') | trim }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'U-62', 'item': '로그인 시 경고 메시지 설정',
+      'status': 'PASS' if (u62_motd | length > 0 or u62_issue | length > 0) else 'FAIL',
+      'detail': 'Telnet/FTP/SMTP/DNS는 미사용 확정(해당없음) — 원문 [서버] 갈래만 실측: /etc/motd=' ~ (u62_motd | truncate(80) if u62_motd | length > 0 else '없음(빈 파일 또는 미존재)') ~ ' / /etc/issue=' ~ (u62_issue | truncate(80) if u62_issue | length > 0 else '없음(빈 파일 또는 미존재)')
     }] }}"
 
 # U-32 | 홈 디렉터리 관리 (소유자 일치, 그룹/전체 쓰기 금지)
