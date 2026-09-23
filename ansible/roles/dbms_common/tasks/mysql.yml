@@ -367,17 +367,31 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# D-17 | Audit Table 접근 제한 — MySQL은 1차 점검 스코프 제외 [확정 — 2026-09-14 인프라팀 회신]
-#   pgAudit이 PostgreSQL 전용이라 이 스택에서 MySQL 쪽 별도 구현이 없음이 확인됨.
-#   2차 점검 시점에 화이트리스트를 새로 받을지, 1차처럼 계속 제외할지 재논의 예정이라
-#   영구 배제(N/A)가 아니라 SKIP으로 둔다.
+# D-17 | Audit Table 접근 제한 — MySQL 감사 플러그인 활성화 여부로 직접 판정(PostgreSQL의
+#   pgaudit 로드 여부 판정과 동일 원칙). [2026-09-23] 인프라팀 회신으로 오픈소스 Audit
+#   Plugin 후보는 있으나 보안/버전 지원 검토 중이라 아직 미도입 확정 — "회신 대기"가 아니라
+#   "현재 미구현"이므로 SKIP이 아니라 실측 FAIL로 전환. 도입 완료 시 별도 코드 수정 없이
+#   자동으로 PASS 전환됨.
 # -----------------------------------------------------------------------------
-- name: "{{ db_conn.service }} | D-17 판정 기록(1차 스코프 제외)"
+- name: "{{ db_conn.service }} | D-17 감사 플러그인 활성화 여부 조회"
+  community.mysql.mysql_query:
+    login_host: "{{ db_conn.host }}"
+    login_port: "{{ db_conn.port }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
+    query: "SELECT PLUGIN_NAME, PLUGIN_STATUS FROM information_schema.PLUGINS WHERE PLUGIN_NAME LIKE '%audit%'"
+  register: d17_raw
+  failed_when: false
+
+- name: "{{ db_conn.service }} | D-17 판정 기록"
+  vars:
+    d17_plugins: "{{ d17_raw.query_result | default([]) | first | default([]) }}"
+    d17_active: "{{ d17_plugins | selectattr('PLUGIN_STATUS', 'equalto', 'ACTIVE') | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-17', 'item': 'Audit Table은 데이터베이스 관리자 계정으로 접근하도록 제한', 'target': db_conn.service,
-      'status': 'SKIP',
-      'detail': 'MySQL은 1차 점검 스코프에서 제외 — pgAudit이 PostgreSQL 전용, 2차 점검 시 재논의'
+      'status': 'PASS' if d17_active | length > 0 else 'FAIL',
+      'detail': ('활성 감사 플러그인: ' ~ (d17_active | map(attribute='PLUGIN_NAME') | join(', '))) if d17_active | length > 0 else '활성화된 감사 플러그인 없음 — 오픈소스 Audit Plugin 도입 검토 중(보안·버전 지원 확인 중), 도입 전까지 감사기록 파이프라인 미구성으로 취약 판정'
     }] }}"
 
 # -----------------------------------------------------------------------------

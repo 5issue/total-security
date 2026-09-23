@@ -315,13 +315,27 @@
       'detail': '조회 실패' if d11_raw.query_result is not defined else ('비관리자 접근 권한: ' ~ (d11_extra | string | truncate(150) if d11_extra | length > 0 else '없음'))
     }] }}"
 
-# D-17 | Audit Table 접근 제한 (MySQL은 1차 점검 스코프 제외)
-- name: "{{ db_conn.service }} | D-17 판정 기록(1차 스코프 제외)"
+# D-17 | Audit Table 접근 제한 (감사 플러그인 활성화 여부로 실측 — 오픈소스 Audit Plugin은
+# 후보만 있고 보안/버전 지원 검토 중이라 미도입 확정, 도입 전까지 자동 FAIL)
+- name: "{{ db_conn.service }} | D-17 감사 플러그인 활성화 여부 조회"
+  community.mysql.mysql_query:
+    login_host: "{{ db_conn.host }}"
+    login_port: "{{ db_conn.port }}"
+    login_user: "{{ mysql_admin_user }}"
+    login_password: "{{ mysql_admin_password }}"
+    query: "SELECT PLUGIN_NAME, PLUGIN_STATUS FROM information_schema.PLUGINS WHERE PLUGIN_NAME LIKE '%audit%'"
+  register: d17_raw
+  failed_when: false
+
+- name: "{{ db_conn.service }} | D-17 판정 기록"
+  vars:
+    d17_plugins: "{{ d17_raw.query_result | default([]) | first | default([]) }}"
+    d17_active: "{{ d17_plugins | selectattr('PLUGIN_STATUS', 'equalto', 'ACTIVE') | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-17', 'item': 'Audit Table은 데이터베이스 관리자 계정으로 접근하도록 제한', 'target': db_conn.service,
-      'status': 'SKIP',
-      'detail': 'MySQL은 1차 점검 스코프에서 제외 — pgAudit이 PostgreSQL 전용, 2차 점검 시 재논의'
+      'status': 'PASS' if d17_active | length > 0 else 'FAIL',
+      'detail': ('활성 감사 플러그인: ' ~ (d17_active | map(attribute='PLUGIN_NAME') | join(', '))) if d17_active | length > 0 else '활성화된 감사 플러그인 없음 — 오픈소스 Audit Plugin 도입 검토 중(보안·버전 지원 확인 중), 도입 전까지 감사기록 파이프라인 미구성으로 취약 판정'
     }] }}"
 
 # D-18 | PUBLIC Role — MySQL은 해당 개념 자체가 없음
