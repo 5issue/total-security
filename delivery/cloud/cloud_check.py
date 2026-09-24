@@ -103,7 +103,7 @@ def main():
     results = []
     results += iam_checks.run_all(iam, ec2, awsconfig)
     results += network_checks.run_all(ec2)
-    results += storage_checks.run_all(ec2, s3, s3control, rds, account_id)
+    results += storage_checks.run_all(ec2, s3, s3control, rds, account_id, cloudtrail, elbv2, ssm, awsconfig)
     results += logging_checks.run_all(elbv2, logs, ec2, cloudtrail)
     results += elb_checks.run_all(elbv2, ec2, wafv2)
 

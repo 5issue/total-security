@@ -23,6 +23,8 @@ u07_unnecessary_accounts:
   - news
   - sync
 u07_unused_login_days_threshold: 90
+u07_stale_check_exclude_accounts:   # SSM 접속용 필수 계정(SSM 에이전트가 자동 생성)
+  - ssm-user
 
 # U-08 : root 그룹 권한 제한
 u08_root_group_admin_whitelist: ["root"]
@@ -71,6 +73,10 @@ u23_allowed_suid_sgid:
   - /usr/bin/chage
   - /usr/bin/write
   - /usr/bin/screen
+u15_unowned_exclude_dirs:   # U-15 제외 경로(컨테이너 이미지 레이어)
+  - /var/lib/containerd
+u23_suid_exclude_dirs:      # U-23 제외 경로(컨테이너 이미지 레이어)
+  - /var/lib/containerd
 
 # U-24 : 사용자 환경 파일 보호
 u24_user_env_files:
@@ -290,7 +296,6 @@ u64_dnf_patch_max_age_days: 30
 
 # U-66 : 정책에 따른 시스템 로깅 설정
 u66_missing_log_categories:
-  - "SSM 세션로그"
   - "sudo 로그"
   - "DB 감사로그"
 u66_log_group_name: null
@@ -309,57 +314,73 @@ d26_audit_log_group_name: null
 
 # 서비스별 DB 계정/DB명/NetworkPolicy 라벨 매핑 (D-02/04/06/10 공통 참조)
 dbms_service_accounts:
-  - service: member-service
+  - service: user-service
     engine: mysql
-    database: member_db
-    account: member_service
+    database: user_db
+    account: user_user
   - service: auth-service
     engine: mysql
     database: auth_db
-    account: auth_service
+    account: auth_user
   - service: order-service
     engine: mysql
     database: order_db
-    account: order_service
+    account: order_user
   - service: payment-service
     engine: mysql
     database: payment_db
-    account: payment_service
+    account: payment_user
   - service: product-service
     engine: postgresql
     database: product_db
-    account: product_service
+    account: product_user
   - service: oms-service
     engine: postgresql
     database: oms_db
-    account: oms_service
+    account: oms_user
   - service: wms-service
     engine: postgresql
     database: wms_db
-    account: wms_service
+    account: wms_user
   - service: scm-service
     engine: postgresql
     database: scm_db
-    account: scm_service
+    account: scm_user
 
 # D-02 : 불필요 계정 제거
 d02_unnecessary_account_whitelist:
-  - member_service
-  - auth_service
-  - order_service
-  - payment_service
-  - oms_service
-  - product_service
-  - wms_service
-  - scm_service
+  - user_user
+  - auth_user
+  - order_user
+  - payment_user
+  - oms_user
+  - product_user
+  - wms_user
+  - scm_user
+  - ai_user        # ai-service 계정(점검 8개 서비스 범위 밖이지만 같은 PostgreSQL 클러스터의 정상 계정)
+
+# D-02/04/06/21 : 운영 필수 계정(오퍼레이터 내부 계정 / DBA 관리 계정)
+dbms_operator_accounts:
+  mysql: [moco-admin, moco-agent, moco-repl, moco-clone-donor, moco-exporter, moco-backup, moco-readonly, moco-writable]
+  postgresql: [streaming_replica]
+dbms_dba_accounts: [dba_admin]
+
+# D-03 : dba_admin 비밀번호 자동 교체 이력(DB 만료 설정과 함께 인정)
+d03_rotation:
+  namespace: backend
+  annotation: "dba-admin/last-rotated"
+  secrets:
+    mysql: "shared-mysql-dba-admin"
+    postgresql: "shared-pg-dba-admin-credentials"
 
 # D-03 : 비밀번호 사용기간·복잡도 (서비스 계정 제외, 전용 유저 계정에만 적용)
+# [2026-09-23] 전용 유저 계정 dba_admin 생성 확인(인프라팀)
 d03_password_max_days: 90
 d03_password_min_length: 12
 d03_password_complexity_min_classes: 3
 d03_user_accounts:
-  mysql: []
-  postgresql: []
+  mysql: ["dba_admin"]
+  postgresql: ["dba_admin"]
 
 # D-04 : 관리자 권한 최소 인원
 d04_admin_account_whitelist: []
@@ -378,95 +399,64 @@ d10_np_label_key: "app"
 # D-20 : 인가되지 않은 Object Owner 제한
 d20_admin_owner_whitelist:
   - postgres
-  - product_service
-  - wms_service
-  - scm_service
+  - product_user
+  - wms_user
+  - scm_user
+  - oms_user   # 2026-09-24 추가 — oms_db(9/23 활성화)도 같은 규칙
 
 # D-21 : 인가되지 않은 GRANT OPTION 사용 제한
 d21_grant_option_admin_whitelist:
   - root
   - postgres
 
-# DB 접속 정보 — oms_db(PostgreSQL)는 Secret 미확정으로 제외
+# DB 접속 정보
 dbms_connections:
-  - service: member_db
+  - service: user_db
     engine: mysql
-    host: "shared-mysql-primary.svc.cluster.local"
-    port: 3306
-    secret_ref: "shared-mysql-accounts"
     namespace: backend
     pod_label_selector: "app.kubernetes.io/instance=shared-mysql"
   - service: auth_db
     engine: mysql
-    host: "shared-mysql-primary.svc.cluster.local"
-    port: 3306
-    secret_ref: "shared-mysql-accounts"
     namespace: backend
     pod_label_selector: "app.kubernetes.io/instance=shared-mysql"
   - service: order_db
     engine: mysql
-    host: "shared-mysql-primary.svc.cluster.local"
-    port: 3306
-    secret_ref: "shared-mysql-accounts"
     namespace: backend
     pod_label_selector: "app.kubernetes.io/instance=shared-mysql"
   - service: payment_db
     engine: mysql
-    host: "shared-mysql-primary.svc.cluster.local"
-    port: 3306
-    secret_ref: "shared-mysql-accounts"
     namespace: backend
     pod_label_selector: "app.kubernetes.io/instance=shared-mysql"
   - service: product_db
     engine: postgresql
-    host: "shared-pg-rw.backend.svc.cluster.local"
-    port: 5432
-    secret_ref: "shared-pg-product-service-credentials"
     namespace: backend
     pod_label_selector: "cnpg.io/cluster=shared-pg"
     database: "product_db"
   - service: wms_db
     engine: postgresql
-    host: "shared-pg-rw.backend.svc.cluster.local"
-    port: 5432
-    secret_ref: "shared-pg-wms-service-credentials"
     namespace: backend
     pod_label_selector: "cnpg.io/cluster=shared-pg"
     database: "wms_db"
   - service: scm_db
     engine: postgresql
-    host: "shared-pg-rw.backend.svc.cluster.local"
-    port: 5432
-    secret_ref: "shared-pg-scm-service-credentials"
     namespace: backend
     pod_label_selector: "cnpg.io/cluster=shared-pg"
     database: "scm_db"
-  # oms_db(PostgreSQL) — secret_ref 확정 전까지 제외
-  # - service: oms_db
-  #   engine: postgresql
-  #   host: "shared-pg-rw.backend.svc.cluster.local"
-  #   port: 5432
-  #   secret_ref: null
-  #   namespace: backend
-  #   pod_label_selector: "cnpg.io/cluster=shared-pg"
-  #   database: "oms_db"
+  - service: oms_db   # [2026-09-23] 시크릿명 확정(인프라팀), 다른 PostgreSQL DB와 동일 규칙
+    engine: postgresql
+    namespace: backend
+    pod_label_selector: "cnpg.io/cluster=shared-pg"
+    database: "oms_db"
 
 # DBMS 관리자(admin) 접속 정보 — D-01/02/04/06/08/11/18/20/21 전용(그 외 항목은 dbms_connections 사용)
-# [2026-09-23] root/ROOT_PASSWORD는 틀린 가정이었음 — MOCO는 root 직접 접근 차단,
-# 실제 관리자는 moco-admin/ADMIN_PASSWORD(인프라팀 실측 검증 완료)
+# MySQL은 DBA 관리 계정 dba_admin(Secret shared-mysql-dba-admin, 90일 자동 교체) 사용,
+# PostgreSQL은 CNPG 파드 내부 로컬 접속이라 별도 Secret 불필요
 dbms_admin_connections:
   mysql:
-    host: "shared-mysql-primary.svc.cluster.local"
-    port: 3306
     namespace: backend
-    secret_ref: "moco-shared-mysql"
-    secret_username: "moco-admin"
-    secret_password_key: "ADMIN_PASSWORD"
-  postgresql:
-    host: "shared-pg-rw.backend.svc.cluster.local"
-    port: 5432
-    namespace: backend
-    secret_ref: "shared-pg-superuser"
+    secret_ref: "shared-mysql-dba-admin"
+    secret_username: "dba_admin"
+    secret_password_key: "password"
 
 # =============================================================================
 # 인증_인가(AUTHZ-XX, SVC-01) 기준값

@@ -1,0 +1,34 @@
+---
+# =============================================================================
+# db_exec_prepare.yml — 파드 내부 쿼리 실행(db_exec_query.yml) 준비. 커넥션마다 1회.
+#   [2026-09-24 재설계] 기존엔 mgmt 서버에서 DB로 TCP 접속했으나, DB 파드의 NetworkPolicy
+#   (shared-mysql-ingress/shared-pg-ingress)가 서비스 파드만 허용하고 *.svc.cluster.local은
+#   클러스터 밖에서 조회되지 않아 1차부터 한 번도 접속된 적이 없었음(D-09 행 누락으로 확인).
+#   인프라팀이 실제로 검증한 방식(kubectl exec -c mysqld -- mysql ...)과 동일하게, DB 파드
+#   안에서 DB 클라이언트 단일 명령을 실행하는 방식으로 전환(대화형 쉘 세션 아님).
+# =============================================================================
+
+# register와 달리 set_fact 결과는 include가 when으로 건너뛰어져도 이전 커넥션 값이 남으므로
+# (예: D-09 버전 게이트로 조회를 건너뛰면 앞 DB의 결과가 재사용됨) 커넥션마다 초기화한다.
+- name: "{{ db_conn.service }} | 이전 커넥션 쿼리 결과 초기화"
+  ansible.builtin.set_fact:
+    "{{ item }}": {}
+  loop: [d01_raw, d02_raw, d03_user_raw, d03_policy_raw, d03_ext_raw, d04_raw, d05_raw, d06_raw,
+         d08_raw, d09_version_raw, d09_raw, d11_raw, d17_raw, d18_raw, d20_raw, d21_raw]
+
+- name: "{{ db_conn.service }} | 쿼리 실행 대상 DB 파드 조회"
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ db_conn.namespace }}"
+    label_selectors:
+      - "{{ db_conn.pod_label_selector }}"
+  register: dbq_pods_raw
+  failed_when: false
+
+- name: "{{ db_conn.service }} | 쿼리 실행 파드·컨테이너 결정"
+  ansible.builtin.set_fact:
+    dbq_pod: "{{ (dbq_pods_raw.resources | default([]) | selectattr('status.phase', 'equalto', 'Running') | map(attribute='metadata.name') | list | first) | default('', true) }}"
+    # MOCO는 mysqld, CNPG는 postgres 컨테이너에 DB 클라이언트가 있음(인프라팀 검증 명령과 동일)
+    dbq_container: "{{ 'mysqld' if db_conn.engine == 'mysql' else 'postgres' }}"
+    dbq_errors: "{{ [] if (dbq_pods_raw.resources | default([]) | selectattr('status.phase', 'equalto', 'Running') | list | length > 0)
+                    else ['라벨셀렉터(' ~ db_conn.pod_label_selector ~ ')로 Running 파드 없음' ~ ((' / ' ~ dbq_pods_raw.msg) if dbq_pods_raw.msg is defined else '')] }}"

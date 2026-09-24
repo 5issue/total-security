@@ -1,0 +1,20 @@
+---
+# db_exec_errors.yml — 이 커넥션의 "조회 실패" 행 상세에 첫 번째 실패 원인을 붙인다.
+#   (결과 엑셀만 보고도 권한/인증/파드 문제를 구분할 수 있게 — 2차 점검 때 원인 파악에
+#   여러 차례 재질의가 필요했던 문제 방지)
+- name: "{{ db_conn.service }} | 조회 실패 행에 실패 원인 추가"
+  vars:
+    dbq_first_error: "{{ dbq_errors | default([]) | first | default('') }}"
+  ansible.builtin.set_fact:
+    check_results: >-
+      {%- set out = [] -%}
+      {%- for r in check_results -%}
+      {#- D-03 전용 계정 행(target '전체(...)')도 이 커넥션에서 기록되므로 포함. 이미 원인이 붙은 행은 제외 -#}
+      {%- if (r.target == db_conn.service or (r.target | string).startswith('전체(')) and (r.detail | string).startswith('조회 실패') and ' — 원인: ' not in (r.detail | string) -%}
+      {%- set _ = out.append(r | combine({'detail': (r.detail | string) ~ ' — 원인: ' ~ dbq_first_error})) -%}
+      {%- else -%}
+      {%- set _ = out.append(r) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  when: dbq_errors | default([]) | length > 0

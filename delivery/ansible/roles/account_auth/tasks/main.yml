@@ -138,14 +138,15 @@
     u07_found: "{{ u07_blacklist_check.results | selectattr('rc', 'equalto', 0) | list }}"
     u07_risky: "{{ u07_found | selectattr('stdout', 'search', '/bin/(bash|sh)$') | list }}"
     u07_human_accounts: "{{ u07_human_accounts_raw.stdout_lines | default([]) }}"
-    u07_stale_accounts: "{{ (u07_stale_raw.stdout_lines | default([])) | intersect(u07_human_accounts) }}"
+    u07_stale_accounts: "{{ (u07_stale_raw.stdout_lines | default([])) | intersect(u07_human_accounts) | difference(u07_stale_check_exclude_accounts | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-07', 'item': '불필요한 계정 제거',
       'status': 'FAIL' if (u07_risky | length > 0 or u07_stale_accounts | length > 0) else 'PASS',
       'detail': '로그인 가능한 블랙리스트 계정: ' ~ (u07_risky | map(attribute='stdout') | join('; ') if u07_risky | length > 0 else '없음') ~
                 ' / 존재하지만 로그인 제한된 계정: ' ~ ((u07_found | length - u07_risky | length) | string) ~ '개(참고, 업무영향 확인 후 제거 권고)' ~
-                ' / ' ~ (u07_unused_login_days_threshold | string) ~ '일 이상 미로그인 사람 계정: ' ~ (u07_stale_accounts | join(', ') if u07_stale_accounts | length > 0 else '없음')
+                ' / ' ~ (u07_unused_login_days_threshold | string) ~ '일 이상 미로그인 사람 계정: ' ~ (u07_stale_accounts | join(', ') if u07_stale_accounts | length > 0 else '없음') ~
+                ' (미사용 판정 제외 — SSM 접속용 필수 계정: ' ~ (u07_stale_check_exclude_accounts | default([]) | join(', ')) ~ ')'
     }] }}"
 
 # U-08 | root 그룹 권한 제한 [기준값필요: u08_root_group_admin_whitelist]

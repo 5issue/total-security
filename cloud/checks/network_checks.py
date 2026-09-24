@@ -11,10 +11,14 @@ def check_3_1_sg_any(ec2):
     for sg in sgs["SecurityGroups"]:
         for direction, perms in (("in", sg["IpPermissions"]), ("out", sg["IpPermissionsEgress"])):
             for perm in perms:
+                # 2026-09-24 — 원문 기준은 "포트가 Any로 허용"이므로 모든 트래픽(-1)뿐 아니라
+                # TCP/UDP 전체 포트 범위(0~65535, 1~65535)도 Any로 판정(프로토콜만 바꿔 우회하는 경우 방지)
                 is_any_proto = perm.get("IpProtocol") == "-1"
+                is_all_ports = (perm.get("IpProtocol") in ("tcp", "udp", "6", "17")
+                                and perm.get("FromPort", 65535) <= 1 and perm.get("ToPort", 0) >= 65535)
                 open_v4 = any(r.get("CidrIp") == "0.0.0.0/0" for r in perm.get("IpRanges", []))
                 open_v6 = any(r.get("CidrIpv6") == "::/0" for r in perm.get("Ipv6Ranges", []))
-                if is_any_proto and (open_v4 or open_v6):
+                if (is_any_proto or is_all_ports) and (open_v4 or open_v6):
                     offenders.append(f"{sg['GroupId']}({direction})")
     status = "PASS" if not offenders else "FAIL"
     detail = "전체(ANY) 허용 규칙 보유 SG: " + (", ".join(offenders) if offenders else "없음")

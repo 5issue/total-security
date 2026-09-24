@@ -16,7 +16,7 @@
       'id': 'U-66', 'item': '정책에 따른 시스템 로깅 설정', 'target': '전체(CloudWatch 로그그룹)',
       'status': 'FAIL',
       'detail': '미구현 확인된 필수 로그: ' ~ (u66_missing_log_categories | join(', ')) ~
-                ' — 현재 ALB 액세스로그용 S3 버킷만 구현됨(인프라팀 구현 예정, 조치 필요 항목으로 보고)'
+                ' — 인프라팀 구현 예정(조치 필요 항목으로 보고)'
     }] }}"
   when: u66_missing_log_categories | default([]) | length > 0
   run_once: true

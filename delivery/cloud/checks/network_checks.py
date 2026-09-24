@@ -12,9 +12,11 @@ def check_3_1_sg_any(ec2):
         for direction, perms in (("in", sg["IpPermissions"]), ("out", sg["IpPermissionsEgress"])):
             for perm in perms:
                 is_any_proto = perm.get("IpProtocol") == "-1"
+                is_all_ports = (perm.get("IpProtocol") in ("tcp", "udp", "6", "17")
+                                and perm.get("FromPort", 65535) <= 1 and perm.get("ToPort", 0) >= 65535)
                 open_v4 = any(r.get("CidrIp") == "0.0.0.0/0" for r in perm.get("IpRanges", []))
                 open_v6 = any(r.get("CidrIpv6") == "::/0" for r in perm.get("Ipv6Ranges", []))
-                if is_any_proto and (open_v4 or open_v6):
+                if (is_any_proto or is_all_ports) and (open_v4 or open_v6):
                     offenders.append(f"{sg['GroupId']}({direction})")
     status = "PASS" if not offenders else "FAIL"
     detail = "전체(ANY) 허용 규칙 보유 SG: " + (", ".join(offenders) if offenders else "없음")

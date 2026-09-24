@@ -13,7 +13,13 @@ def check_4_4_transit_encryption(elbv2):
         if lerr:
             continue
         for l in listeners["Listeners"]:
-            if l["Protocol"] in ("HTTP", "TCP"):
+            # 2026-09-24 — HTTPS 리다이렉트 전용 HTTP 리스너는 평문 서비스가 아니므로 제외
+            # (3.10이 80→443 리다이렉트를 필수로 요구하므로, 제외하지 않으면 두 항목이 동시에 PASS 불가)
+            actions = l.get("DefaultActions", [])
+            https_redirect_only = l["Protocol"] == "HTTP" and bool(actions) and all(
+                a.get("Type") == "redirect" and a.get("RedirectConfig", {}).get("Protocol") == "HTTPS"
+                for a in actions)
+            if l["Protocol"] in ("HTTP", "TCP") and not https_redirect_only:
                 plaintext.append(f"{lb['LoadBalancerName']}:{l['Port']}({l['Protocol']})")
     status = "PASS" if not plaintext else "FAIL"
     detail = "평문 리스너: " + (", ".join(plaintext) if plaintext else "없음(전체 HTTPS/TLS)")
