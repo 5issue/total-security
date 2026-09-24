@@ -55,6 +55,11 @@ EKS_ACCESS_WHITELIST = [
     "arn:aws:iam::596601390909:user/infra-jiyoon",
 ]
 
+# 1.12 SA 토큰 자동 마운트 판정 범위 — 모든 네임스페이스 default SA + 앱 네임스페이스 SA
+# (K8s API가 필요한 SA는 "네임스페이스/SA이름" 형식으로 예외에 추가)
+EKS_APP_NAMESPACES = ["backend", "frontend", "dev"]
+EKS_SA_API_ACCESS_EXCEPTIONS = ["backend/shared-pg"]   # CNPG DB 파드용 SA
+
 # 2.1(인스턴스 서비스) — EKS 워커노드/NAT 인스턴스 IAM 역할에 허용된 관리형 정책
 EKS_WORKER_NODE_REQUIRED_POLICIES = [
     "AmazonEKSWorkerNodePolicy",

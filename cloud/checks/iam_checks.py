@@ -108,17 +108,41 @@ def check_1_4_group_membership(iam):
     return [make_result("1.4", "IAM 그룹 사용자 계정 관리", status, f"화이트리스트 외 구성원: {unauthorized}")]
 
 
+def _ssh_inbound_open(perm):
+    proto = perm.get("IpProtocol")
+    return proto == "-1" or (proto in ("tcp", "6") and perm.get("FromPort", 0) <= 22 <= perm.get("ToPort", -1))
+
+
 def check_1_5_keypair_access(ec2):
+    # [2026-09-24 보안팀 판단(사용자 확정)] 원문 취약기준은 "Key Pair가 아닌 일반 패스워드로
+    # EC2에 접근하는 경우"다. 이 프로젝트는 Key Pair 없이 SSM(IAM 인증)으로만 접속하므로
+    # Key Pair 미설정 자체를 FAIL로 보지 않고, "정말 Key Pair/SSH를 안 쓰는지"를 확인한다 —
+    # Key Pair 미설정 인스턴스에 연결된 SG에 22번 인바운드가 하나도 없으면 패스워드 접근
+    # 경로 자체가 없으므로 양호(U-28과 동일한 SSM 보완통제 논리), 22번이 열려 있으면 FAIL.
     reservations, err = safe_call(ec2.describe_instances)
     if err:
         return [make_result("1.5", "Key Pair 접근 관리", "SKIP", f"EC2 인스턴스 조회 실패: {err}")]
-    no_keypair = []
+    sgs, serr = safe_call(ec2.describe_security_groups)
+    if serr:
+        return [make_result("1.5", "Key Pair 접근 관리", "SKIP", f"보안그룹 조회 실패: {serr}")]
+    ssh_open_sgs = {sg["GroupId"] for sg in sgs["SecurityGroups"]
+                    if any(_ssh_inbound_open(p) for p in sg["IpPermissions"])}
+    with_keypair, ssm_only, ssh_exposed = [], [], []
     for res in reservations["Reservations"]:
         for inst in res["Instances"]:
-            if not inst.get("KeyName"):
-                no_keypair.append(inst["InstanceId"])
-    status = "PASS" if not no_keypair else "FAIL"
-    detail = "Key Pair 미설정 인스턴스: " + (", ".join(no_keypair) if no_keypair else "없음")
+            if inst.get("KeyName"):
+                with_keypair.append(inst["InstanceId"])
+                continue
+            open_sgs = sorted({g["GroupId"] for g in inst.get("SecurityGroups", [])} & ssh_open_sgs)
+            if open_sgs:
+                ssh_exposed.append(f"{inst['InstanceId']}({', '.join(open_sgs)})")
+            else:
+                ssm_only.append(inst["InstanceId"])
+    status = "FAIL" if ssh_exposed else "PASS"
+    detail = ("Key Pair 없이 SSH(22) 인바운드가 열린 인스턴스(패스워드 접근 가능성): "
+              + (", ".join(ssh_exposed) if ssh_exposed else "없음")
+              + f" / Key Pair 미사용·SSH 인바운드 차단(SSM 전용 접속, 패스워드 접근 경로 없음): {len(ssm_only)}대"
+              + " / Key Pair 사용 인스턴스: " + (", ".join(with_keypair) if with_keypair else "없음"))
     return [make_result("1.5", "Key Pair 접근 관리", status, detail)]
 
 

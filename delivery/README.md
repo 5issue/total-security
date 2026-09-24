@@ -76,9 +76,9 @@ sha256sum infra_check_20260914_1차.xlsx > infra_check_20260914_1차.xlsx.sha256
   `ansible/group_vars/all.yml` 또는 `cloud/config.py`에 해당 기준값이 아직 비어있다는
   뜻입니다 — 코드 수정 없이 값만 채우면 다음 실행부터 정상 판정됩니다.
 - **DBMS 접속 정보(`dbms_connections`, `dbms_admin_connections`)는 인프라팀이 준 서비스/관리자
-  계정 기준으로 채워져 있습니다.** oms 서비스(PostgreSQL)만 Secret 미확정으로 제외돼 있어
-  SKIP으로 나옵니다. D-01/02/04/06/08/11/18/20/21은 관리자 계정(`dbms_admin_connections`)으로
-  조회하도록 전환되어 있습니다.
+  계정 기준으로 전부 채워져 있습니다**(oms 서비스 Secret도 확정 반영 완료). D-01/02/04/06/
+  08/11/18/20/21은 관리자 계정(`dbms_admin_connections`)으로 조회하도록 전환되어 있고,
+  D-03 전용 유저 계정(`dba_admin`)도 반영돼 실측으로 판정됩니다.
 - DB 연결 자체가 안 되거나(host 오타 등) 인프라팀 서비스어카운트/관리자 계정에 Secret 읽기
   권한이 아직 없으면, 관련 DBMS 항목들이 FAIL이나 에러로 표시됩니다 — 이 경우 저희에게
   알려주시면 값만 다시 맞춰서 전달하겠습니다.

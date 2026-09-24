@@ -75,6 +75,17 @@ EKS_ACCESS_WHITELIST = [
     "arn:aws:iam::596601390909:user/infra-jiyoon",
 ]
 
+# 1.12 EKS 서비스 어카운트 토큰 자동 마운트 — 판정 범위
+# [2026-09-24 보안팀 판단(사용자 확정)] 원문은 "애플리케이션이 K8s API를 호출할 필요가
+# 없는 경우" 자동 마운트를 끄라고 하므로, API 호출이 본업인 컨트롤러/오퍼레이터 SA(argocd,
+# karpenter, cert-manager 등)는 대상에서 제외한다. 판정 대상: 모든 네임스페이스의 default SA
+# + 아래 앱 네임스페이스의 SA. 앱 네임스페이스 안에서도 K8s API가 실제로 필요한 SA는
+# 인프라팀 확인 후 "네임스페이스/SA이름" 형식으로 예외에 추가한다.
+EKS_APP_NAMESPACES = ["backend", "frontend", "dev"]
+EKS_SA_API_ACCESS_EXCEPTIONS = [
+    "backend/shared-pg",   # 2026-09-24 — CNPG DB 파드용 SA(인스턴스 매니저가 K8s API로 클러스터 상태를 관리)
+]
+
 # 2.1(인스턴스 서비스) — EKS 워커노드/NAT 인스턴스 IAM 역할에 허용된 관리형 정책
 # [확정 — 2026-09-13 인프라팀 직접 질의 회신] 이름 외 정책이 붙어 있으면(초과) FAIL,
 # 누락돼도 FAIL(권한 부족으로 오작동 가능성). ARN 전체가 아니라 정책 이름만 비교.

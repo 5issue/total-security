@@ -163,18 +163,21 @@
   kubernetes.core.k8s_exec:
     namespace: "{{ db_conn.namespace }}"
     pod: "{{ k8s_pods_raw.resources[0].metadata.name }}"
-    command: sh -c "apt list --upgradable 2>/dev/null | tail -n +2"
+    container: "{{ 'mysqld' if db_conn.engine == 'mysql' else 'postgres' }}"
+    command: sh -c "apt list --upgradable 2>/dev/null"
   register: d25_raw
   failed_when: false
   when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0) and db_conn.engine in ['mysql', 'postgresql']
 
 - name: "{{ db_conn.service }} | D-25 판정 기록"
   vars:
-    d25_lines: "{{ (d25_raw.stdout | default('')).split('\n') | select() | list }}"
+    d25_ok: "{{ not (d25_raw.failed | default(false)) and (d25_raw.rc | default(d25_raw.return_code | default(-1))) | int == 0 and (d25_raw.stdout | default('')).startswith('Listing') }}"
+    d25_lines: "{{ (d25_raw.stdout | default('')).split('\n')[1:] | select() | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-25', 'item': '주기적 보안 패치 및 벤더 권고사항 적용', 'target': db_conn.service,
-      'status': 'PASS' if d25_lines | length == 0 else 'FAIL',
-      'detail': '미적용 보안 업데이트 ' ~ (d25_lines | length | string) ~ '건' ~ (': ' ~ (d25_lines | join(', ') | truncate(150)) if d25_lines | length > 0 else '')
+      'status': 'FAIL' if not d25_ok else ('PASS' if d25_lines | length == 0 else 'FAIL'),
+      'detail': ('조회 실패 — 원인: ' ~ ((d25_raw.stderr | default('') | trim) or (d25_raw.msg | default('') | trim) or '출력 없음(apt 미설치 또는 exec 실패)') | truncate(160)) if not d25_ok
+                else '미적용 보안 업데이트 ' ~ (d25_lines | length | string) ~ '건' ~ (': ' ~ (d25_lines | join(', ') | truncate(150)) if d25_lines | length > 0 else '')
     }] }}"
   when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0) and db_conn.engine in ['mysql', 'postgresql']

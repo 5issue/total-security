@@ -1,0 +1,44 @@
+---
+# =============================================================================
+# db_exec_query.yml — DB 파드 내부 클라이언트로 SQL 1건 실행(db_exec_prepare.yml 선행 필요)
+#   입력: dbq_name(결과를 담을 변수명), dbq_sql, dbq_db(PostgreSQL 대상 DB, 기본 postgres)
+#   결과: {{ dbq_name }} = 성공 시 {'query_result': ...} — 기존 mysql_query/postgresql_query
+#         모듈과 같은 형태(MySQL은 [행목록], PostgreSQL은 행목록)라 판정 태스크는 기존처럼
+#         `query_result is defined`로 성공 여부를 본다. 실패 시 {'exec_error': 원인}이고,
+#         원인은 dbq_errors에 쌓여 db_exec_errors.yml이 "조회 실패" 행 상세에 붙인다.
+#   MySQL: dba_admin(Secret shared-mysql-dba-admin)으로 `mysql -B` 실행 → 탭 구분 출력 파싱
+#   PostgreSQL: CNPG 파드 내부 로컬 소켓(peer 인증, postgres)으로 `psql` 실행, 쿼리를
+#               json_agg로 감싸 JSON 한 줄로 받음(불리언·숫자 타입 유지)
+# =============================================================================
+
+- name: "{{ db_conn.service }} | {{ dbq_name }} 파드 내부 쿼리 실행"
+  kubernetes.core.k8s_exec:
+    namespace: "{{ db_conn.namespace }}"
+    pod: "{{ dbq_pod }}"
+    container: "{{ dbq_container }}"
+    command: >-
+      {%- if db_conn.engine == 'mysql' -%}
+      mysql -u {{ mysql_admin_user | quote }} --password={{ mysql_admin_password | quote }} -B -e {{ dbq_sql | quote }}
+      {%- else -%}
+      psql -X -A -t -v ON_ERROR_STOP=1 -d {{ dbq_db | default('postgres') | quote }} -c {{ ("SELECT coalesce(json_agg(q), '[]'::json) FROM (" ~ dbq_sql ~ ") q") | quote }}
+      {%- endif -%}
+  register: dbq_exec
+  failed_when: false
+  no_log: true   # MySQL 명령에 비밀번호가 포함됨
+  when: dbq_pod | length > 0
+
+- name: "{{ db_conn.service }} | {{ dbq_name }} 결과 변환"
+  vars:
+    dbq_rc: "{{ dbq_exec.rc | default(dbq_exec.return_code | default(-1)) | int }}"
+    dbq_ran_ok: "{{ dbq_pod | length > 0 and not (dbq_exec.failed | default(false)) and dbq_rc | int == 0 }}"
+    # 실패는 None이 아니라 문자열로 표시(vars 템플릿이 None을 ''로 바꿔 성공처럼 보이는 문제 방지)
+    dbq_rows: "{{ ((dbq_exec.stdout | dbq_mysql_rows) if db_conn.engine == 'mysql' else (dbq_exec.stdout | dbq_psql_rows)) if dbq_ran_ok else '__exec_error__' }}"
+    dbq_ok: "{{ dbq_rows is not string }}"
+    dbq_err_raw: >-
+      {{ '실행 파드 없음' if dbq_pod | length == 0
+         else ((dbq_exec.stderr | default('') | trim) or (dbq_exec.msg | default('') | trim) or ('rc=' ~ dbq_rc ~ ', 출력 파싱 실패')) }}
+    # 에러 메시지에 비밀번호가 섞여 나오는 경우 대비(모듈 실패 메시지에 명령이 포함될 수 있음)
+    dbq_err: "{{ (dbq_err_raw | replace(mysql_admin_password, '***') if (mysql_admin_password | default('') | length > 0) else dbq_err_raw) | regex_replace('\\s+', ' ') | truncate(160) }}"
+  ansible.builtin.set_fact:
+    "{{ dbq_name }}": "{{ {'query_result': ([dbq_rows] if db_conn.engine == 'mysql' else dbq_rows)} if dbq_ok else {'exec_error': dbq_err} }}"
+    dbq_errors: "{{ dbq_errors + ([] if dbq_ok else [dbq_name ~ ': ' ~ dbq_err]) }}"

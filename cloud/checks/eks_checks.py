@@ -113,14 +113,19 @@ def check_1_12_automount_token(cluster_name):
     sas, kerr = safe_call(core_v1.list_service_account_for_all_namespaces)
     if kerr:
         return [make_result("1.12", "EKS 서비스 어카운트 관리", "SKIP", f"[{cluster_name}] 조회 실패: {kerr}")]
+    # 2026-09-24 — 판정 범위를 default SA + 앱 네임스페이스 SA로 한정(config.EKS_APP_NAMESPACES 주석 참고)
     violations = [
         f"{sa.metadata.namespace}/{sa.metadata.name}"
         for sa in sas.items
-        if sa.automount_service_account_token is not False
+        if (sa.metadata.name == "default" or sa.metadata.namespace in config.EKS_APP_NAMESPACES)
+        and f"{sa.metadata.namespace}/{sa.metadata.name}" not in config.EKS_SA_API_ACCESS_EXCEPTIONS
+        and sa.automount_service_account_token is not False
     ]
     status = "PASS" if not violations else "FAIL"
     detail = f"[{cluster_name}] automountServiceAccountToken=False 미설정 ServiceAccount " \
-             f"{len(violations)}건: " + (", ".join(violations[:10]) if violations else "없음")
+             f"{len(violations)}건: " + (", ".join(violations[:10]) if violations else "없음") + \
+             f" (판정 범위: 전체 네임스페이스 default SA + 앱 네임스페이스({', '.join(config.EKS_APP_NAMESPACES)}) SA, " \
+             f"K8s API 필요 SA 예외: {', '.join(config.EKS_SA_API_ACCESS_EXCEPTIONS) or '없음'})"
     return [make_result("1.12", "EKS 서비스 어카운트 관리", status, detail)]
 
 

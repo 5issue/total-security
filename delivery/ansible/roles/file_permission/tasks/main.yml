@@ -22,7 +22,7 @@
 
 # U-15 | 불필요한 파일 및 디렉터리 제거 (무소유자 파일 0건 기준)
 - name: "U-15 | 무소유자·무그룹 파일 조회 (로컬 파일시스템만, -xdev)"
-  ansible.builtin.shell: "set -o pipefail && timeout 60 find / -xdev \\( -nouser -o -nogroup \\) 2>/dev/null | head -20"
+  ansible.builtin.shell: "set -o pipefail && timeout 60 find / -xdev {% for d in u15_unowned_exclude_dirs %}-path {{ d | quote }} -prune -o {% endfor %}\\( -nouser -o -nogroup \\) -print 2>/dev/null | head -20"
   args:
     executable: /bin/bash
   register: u15_raw
@@ -34,7 +34,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-15', 'item': '불필요한 파일 및 디렉터리 제거(무소유자 파일)',
       'status': 'PASS' if (u15_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '무소유자/무그룹 파일(최대 20건 표시): ' ~ (u15_raw.stdout | default('없음', true))
+      'detail': '무소유자/무그룹 파일(최대 20건 표시, 제외 경로: ' ~ (u15_unowned_exclude_dirs | join(', ')) ~ '): ' ~ (u15_raw.stdout | default('없음', true))
     }] }}"
 
 # U-16 | /etc/passwd 파일 보호
@@ -168,7 +168,7 @@
 
 # U-23 | SUID/SGID 설정 점검 [확정 기준값: group_vars/all.yml]
 - name: "U-23 | SUID/SGID 파일 조회 (로컬 파일시스템만, -xdev)"
-  ansible.builtin.shell: "set -o pipefail && timeout 90 find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) 2>/dev/null"
+  ansible.builtin.shell: "set -o pipefail && timeout 90 find / -xdev {% for d in u23_suid_exclude_dirs %}-path {{ d | quote }} -prune -o {% endfor %}-type f \\( -perm -4000 -o -perm -2000 \\) -print 2>/dev/null"
   args:
     executable: /bin/bash
   register: u23_raw
@@ -183,7 +183,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-23', 'item': 'SUID/SGID 설정 점검',
       'status': 'PASS' if u23_unauthorized | length == 0 else 'FAIL',
-      'detail': '화이트리스트 밖 SUID/SGID 파일: ' ~ (u23_unauthorized | join(', ') if u23_unauthorized | length > 0 else '없음')
+      'detail': '화이트리스트 밖 SUID/SGID 파일(제외 경로: ' ~ (u23_suid_exclude_dirs | join(', ')) ~ '): ' ~ (u23_unauthorized | join(', ') if u23_unauthorized | length > 0 else '없음')
     }] }}"
 
 # U-24 | 사용자 환경 파일 보호 (그룹/전체 쓰기 권한 금지)
@@ -304,7 +304,7 @@
     cmd: >-
       aws ec2 describe-security-groups
       --group-ids {{ u28_sg_ids_raw.stdout.split() | join(' ') }}
-      --query "SecurityGroups[].IpPermissions[?FromPort<=\`22\` && ToPort>=\`22\`]"
+      --query "SecurityGroups[].IpPermissions[?IpProtocol=='-1' || (FromPort<=`22` && ToPort>=`22`)]"
       --output json
   register: u28_ssh_rules_raw
   delegate_to: localhost
@@ -393,9 +393,9 @@
   ansible.builtin.shell: >
     set -o pipefail &&
     for d in {{ u33_business_file_dirs | join(' ') }}; do
-      [ -d "$d" ] && find "$d" -mindepth 1
-        {% for e in u33_business_file_exclude_dirs %}-not -path "{{ e }}" -not -path "{{ e }}/*" {% endfor %}
-        2>/dev/null;
+    [ -d "$d" ] && find "$d" -mindepth 1
+    {% for e in u33_business_file_exclude_dirs %}-not -path "{{ e }}" -not -path "{{ e }}/*" {% endfor %}
+    2>/dev/null;
     done
   args:
     executable: /bin/bash

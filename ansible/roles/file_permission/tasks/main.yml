@@ -30,7 +30,7 @@
 # U-15 | 불필요한 파일 및 디렉터리 제거 (무소유자 파일 0건 기준)
 # -----------------------------------------------------------------------------
 - name: "U-15 | 무소유자·무그룹 파일 조회 (로컬 파일시스템만, -xdev)"
-  ansible.builtin.shell: "set -o pipefail && timeout 60 find / -xdev \\( -nouser -o -nogroup \\) 2>/dev/null | head -20"
+  ansible.builtin.shell: "set -o pipefail && timeout 60 find / -xdev {% for d in u15_unowned_exclude_dirs %}-path {{ d | quote }} -prune -o {% endfor %}\\( -nouser -o -nogroup \\) -print 2>/dev/null | head -20"
   args:
     executable: /bin/bash
   register: u15_raw
@@ -42,7 +42,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-15', 'item': '불필요한 파일 및 디렉터리 제거(무소유자 파일)',
       'status': 'PASS' if (u15_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '무소유자/무그룹 파일(최대 20건 표시): ' ~ (u15_raw.stdout | default('없음', true))
+      'detail': '무소유자/무그룹 파일(최대 20건 표시, 제외 경로: ' ~ (u15_unowned_exclude_dirs | join(', ')) ~ '): ' ~ (u15_raw.stdout | default('없음', true))
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -196,7 +196,7 @@
 # U-23 | SUID/SGID 설정 점검 [확정 기준값: group_vars/all.yml]
 # -----------------------------------------------------------------------------
 - name: "U-23 | SUID/SGID 파일 조회 (로컬 파일시스템만, -xdev)"
-  ansible.builtin.shell: "set -o pipefail && timeout 90 find / -xdev -type f \\( -perm -4000 -o -perm -2000 \\) 2>/dev/null"
+  ansible.builtin.shell: "set -o pipefail && timeout 90 find / -xdev {% for d in u23_suid_exclude_dirs %}-path {{ d | quote }} -prune -o {% endfor %}-type f \\( -perm -4000 -o -perm -2000 \\) -print 2>/dev/null"
   args:
     executable: /bin/bash
   register: u23_raw
@@ -211,7 +211,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-23', 'item': 'SUID/SGID 설정 점검',
       'status': 'PASS' if u23_unauthorized | length == 0 else 'FAIL',
-      'detail': '화이트리스트 밖 SUID/SGID 파일: ' ~ (u23_unauthorized | join(', ') if u23_unauthorized | length > 0 else '없음')
+      'detail': '화이트리스트 밖 SUID/SGID 파일(제외 경로: ' ~ (u23_suid_exclude_dirs | join(', ')) ~ '): ' ~ (u23_unauthorized | join(', ') if u23_unauthorized | length > 0 else '없음')
     }] }}"
 
 # -----------------------------------------------------------------------------
@@ -353,12 +353,15 @@
   failed_when: false
   when: ansible_ec2_instance_id | default('') | length > 0
 
+# ⚠ 2026-09-24 수정 — command 모듈은 셸을 거치지 않아 `\``가 그대로 JMESPath에 전달되어
+#   "Bad jmespath expression"으로 매번 실패(2차 점검 U-28 SKIP 원인) → 백틱만 사용.
+#   IpProtocol=-1(모든 트래픽) 룰은 FromPort가 없어 포트 비교에서 빠지므로 별도 조건으로 포함.
 - name: "U-28 | 보안그룹 22번 포트 인바운드 룰 조회(mgmt 서버 AWS CLI)"
   ansible.builtin.command:
     cmd: >-
       aws ec2 describe-security-groups
       --group-ids {{ u28_sg_ids_raw.stdout.split() | join(' ') }}
-      --query "SecurityGroups[].IpPermissions[?FromPort<=\`22\` && ToPort>=\`22\`]"
+      --query "SecurityGroups[].IpPermissions[?IpProtocol=='-1' || (FromPort<=`22` && ToPort>=`22`)]"
       --output json
   register: u28_ssh_rules_raw
   delegate_to: localhost
@@ -455,14 +458,17 @@
 #   u33_business_file_exclude_dirs(AWS EKS 최적화 AMI 표준 도구 — cfn-init/VPC CNI/
 #   containerd/EFA 등, 2차 점검 결과 전수 확인 완료) 밖에서 파일이 발견되면 FAIL,
 #   없으면 PASS(N/A 아님 — 실제로 확인했고 업무파일이 없는 것이므로).
+#   ⚠ 2026-09-24 수정 — YAML `>` 블록은 더 깊게 들여쓴 줄의 줄바꿈을 보존하므로, 제외
+#   조건 줄을 들여쓰면 find와 분리된 별개 명령(`-not: command not found`)이 되어 제외가
+#   통째로 무시됨(2차 점검 U-33 FAIL 원인). 모든 줄을 같은 들여쓰기로 유지할 것.
 # -----------------------------------------------------------------------------
 - name: "U-33 | 업무 파일 배치 경로 조회 (표준 도구 경로 제외)"
   ansible.builtin.shell: >
     set -o pipefail &&
     for d in {{ u33_business_file_dirs | join(' ') }}; do
-      [ -d "$d" ] && find "$d" -mindepth 1
-        {% for e in u33_business_file_exclude_dirs %}-not -path "{{ e }}" -not -path "{{ e }}/*" {% endfor %}
-        2>/dev/null;
+    [ -d "$d" ] && find "$d" -mindepth 1
+    {% for e in u33_business_file_exclude_dirs %}-not -path "{{ e }}" -not -path "{{ e }}/*" {% endfor %}
+    2>/dev/null;
     done
   args:
     executable: /bin/bash

@@ -210,18 +210,26 @@
   kubernetes.core.k8s_exec:
     namespace: "{{ db_conn.namespace }}"
     pod: "{{ k8s_pods_raw.resources[0].metadata.name }}"
-    command: sh -c "apt list --upgradable 2>/dev/null | tail -n +2"
+    # 2026-09-24 — 컨테이너 미지정 시 MOCO 파드의 기본 컨테이너가 mysqld가 아닐 수 있어 명시
+    container: "{{ 'mysqld' if db_conn.engine == 'mysql' else 'postgres' }}"
+    # apt 실패가 파이프(tail) 뒤에 가려져 rc=0·빈 출력(=0건 PASS)이 되지 않도록 pipefail 없이
+    # apt 종료코드를 그대로 반환하고, 출력 가공은 판정 쪽에서 한다
+    command: sh -c "apt list --upgradable 2>/dev/null"
   register: d25_raw
   failed_when: false
   when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0) and db_conn.engine in ['mysql', 'postgresql']
 
 - name: "{{ db_conn.service }} | D-25 판정 기록"
   vars:
-    d25_lines: "{{ (d25_raw.stdout | default('')).split('\n') | select() | list }}"
+    # 2026-09-24 — 기존엔 exec 실패로 출력이 비어도 "미적용 0건 → PASS"로 기록됐음(2차 점검 D-25 PASS 신뢰 불가).
+    # apt list 정상 실행 시 첫 줄은 항상 "Listing..." 헤더이므로, 헤더까지 확인해야 실제 조회로 인정한다.
+    d25_ok: "{{ not (d25_raw.failed | default(false)) and (d25_raw.rc | default(d25_raw.return_code | default(-1))) | int == 0 and (d25_raw.stdout | default('')).startswith('Listing') }}"
+    d25_lines: "{{ (d25_raw.stdout | default('')).split('\n')[1:] | select() | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-25', 'item': '주기적 보안 패치 및 벤더 권고사항 적용', 'target': db_conn.service,
-      'status': 'PASS' if d25_lines | length == 0 else 'FAIL',
-      'detail': '미적용 보안 업데이트 ' ~ (d25_lines | length | string) ~ '건' ~ (': ' ~ (d25_lines | join(', ') | truncate(150)) if d25_lines | length > 0 else '')
+      'status': 'FAIL' if not d25_ok else ('PASS' if d25_lines | length == 0 else 'FAIL'),
+      'detail': ('조회 실패 — 원인: ' ~ ((d25_raw.stderr | default('') | trim) or (d25_raw.msg | default('') | trim) or '출력 없음(apt 미설치 또는 exec 실패)') | truncate(160)) if not d25_ok
+                else '미적용 보안 업데이트 ' ~ (d25_lines | length | string) ~ '건' ~ (': ' ~ (d25_lines | join(', ') | truncate(150)) if d25_lines | length > 0 else '')
     }] }}"
   when: k8s_pod_target_ready and (k8s_pods_raw.resources | default([]) | length > 0) and db_conn.engine in ['mysql', 'postgresql']
