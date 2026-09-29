@@ -75,7 +75,6 @@ u23_allowed_suid_sgid:
   - /usr/libexec/utempter/utempter
 u15_unowned_exclude_dirs:
   - /var/lib/containerd
-  - /var/lib/kubelet
 u23_suid_exclude_dirs:
   - /var/lib/containerd
 
