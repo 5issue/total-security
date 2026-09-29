@@ -125,6 +125,7 @@ u23_allowed_suid_sgid:
 #   이미지 안의 파일이지 호스트 파일이 아님(U-25와 같은 판단). find -prune으로 탐색 자체를 건너뛴다.
 u15_unowned_exclude_dirs:
   - /var/lib/containerd
+  - /var/lib/kubelet   # [2026-09-29] 3차 결과 워커노드 184·202건이 전부 파드 볼륨(EBS CSI globalmount 등) — 컨테이너 UID 소유 파일(U-33과 동일 판단)
 u23_suid_exclude_dirs:
   - /var/lib/containerd
 
@@ -167,6 +168,9 @@ u25_world_writable_exclude_dirs:
 u26_dev_exclude_dirs:
   - mqueue
   - shm
+# [2026-09-29] 3차 결과 확인 — 호스트 /dev를 마운트한 파드(EBS CSI 노드 등)의 종료 메시지 파일. kubelet이 파드 시작마다 만든다.
+u26_dev_allowed_files:
+  - /dev/termination-log
 
 # -----------------------------------------------------------------------------
 # U-28 : 접속 IP 및 포트 제한 [2026-09-20 판정기준 재설계 — roles/file_permission/tasks/main.yml
@@ -245,6 +249,10 @@ u33_hidden_allowed_paths:
   - "/tmp/.XIM-unix"
   - "/tmp/.Test-unix"
   - "/var/log/journal/*/.#*journal*"   # journald 로그 교체 중 임시 파일
+  # [2026-09-29] 3차 결과 "확인 필요" 3종 확인 — 모두 정상 파일
+  - "/var/cache/dnf/.gpgkeyschecked.yum"   # dnf 캐시(GPG 키 확인 표시)
+  - "/etc/cni/net.d/.cni-concurrency.lock" # VPC CNI(aws-node) 설정 잠금 파일
+  - "/usr/local/aws-cli/v2/*/dist/awscli/botocore/.changes"   # AWS CLI v2 번들 설치본(RPM 아님, 버전 경로 변동)
 
 # -----------------------------------------------------------------------------
 # U-40 : NFS 접근 통제 [TODO — 허용 호스트 목록 필요, NFS 미사용 예정으로 보임]
