@@ -36,17 +36,45 @@
   changed_when: false
   failed_when: false
 
+- name: "U-15 | 결과 분류(파드 볼륨 / 그 외)"
+  vars:
+    u15_all: "{{ u15_raw.stdout_lines | default([]) | reject('match', '^SCAN_TIMEOUT:') | list }}"
+  ansible.builtin.set_fact:
+    u15_timeout: "{{ u15_raw.stdout_lines | default([]) | select('match', '^SCAN_TIMEOUT:') | map('replace', 'SCAN_TIMEOUT:', '') | list }}"
+    u15_pod: "{{ u15_all | select('match', '/var/lib/kubelet/') | list }}"
+    u15_other: "{{ u15_all | reject('match', '/var/lib/kubelet/') | list }}"
+
+- name: "U-15 | 파드 볼륨 상위 디렉터리 권한 조회(참고)"
+  ansible.builtin.shell: stat -c '%a %U:%G %n' /var/lib/kubelet /var/lib/kubelet/pods 2>/dev/null
+  register: u15_kubelet_perm
+  changed_when: false
+  failed_when: false
+  when: u15_pod | length > 0
+
+- name: "U-15 | 전체 목록 로그 저장(mgmt 서버 ./results)"
+  ansible.builtin.copy:
+    content: "{{ '# U-15 무소유자·무그룹 파일 전체 목록 — ' ~ inventory_hostname ~ ' ' ~ ansible_date_time.iso8601 ~ '\n# 분류|경로 (파드볼륨 = /var/lib/kubelet 아래 컨테이너 UID 소유, 그외 = 조치 대상)\n'
+                 ~ ((u15_pod | map('regex_replace', '^', '파드볼륨|') | list) + (u15_other | map('regex_replace', '^', '그외|') | list)) | join('\n') ~ '\n' }}"
+    dest: "./results/{{ inventory_hostname }}_u15_unowned_{{ ansible_date_time.date }}.log"
+  delegate_to: localhost
+  when: (u15_pod + u15_other) | length > 0
+
 - name: "U-15 | 판정 기록"
   vars:
-    u15_timeout: "{{ u15_raw.stdout_lines | default([]) | select('match', '^SCAN_TIMEOUT:') | map('replace', 'SCAN_TIMEOUT:', '') | list }}"
-    u15_files: "{{ u15_raw.stdout_lines | default([]) | reject('match', '^SCAN_TIMEOUT:') | list }}"
+    u15_log: "{{ 'results/' ~ inventory_hostname ~ '_u15_unowned_' ~ ansible_date_time.date ~ '.log' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-15', 'item': '파일 및 디렉터리 소유자 설정',
       'status': 'PASS' if (u15_raw.stdout | default('') | length == 0) else 'FAIL',
       'detail': (('검색 시간 제한(300초) 초과 — 일부만 확인됨(' ~ (u15_timeout | join(', ')) ~ ') / ') if u15_timeout | length > 0 else '')
-                ~ '무소유자/무그룹 파일 ' ~ (u15_files | length) ~ '건(최대 20건 표시, 제외 경로: ' ~ (u15_unowned_exclude_dirs | join(', ')) ~ '): '
-                ~ (u15_files[:20] | join(', ') if u15_files | length > 0 else '없음')
+                ~ '무소유자/무그룹 파일 ' ~ (u15_pod | length + u15_other | length) ~ '건(제외 경로: ' ~ (u15_unowned_exclude_dirs | join(', ')) ~ ')'
+                ~ ((' — 파드 볼륨(/var/lib/kubelet 아래, 컨테이너 UID 소유) ' ~ (u15_pod | length) ~ '건 / 그 외 ' ~ (u15_other | length) ~ '건'
+                    ~ ((': ' ~ (u15_other[:100] | join(', ')) ~ (' 외 ' ~ (u15_other | length - 100) ~ '건' if u15_other | length > 100 else ''))
+                       if u15_other | length > 0 else '')
+                    ~ ((' | 참고 — 파드 볼륨 상위 디렉터리 권한: ' ~ (u15_kubelet_perm.stdout_lines | default([]) | join('; ')))
+                       if u15_pod | length > 0 else '')
+                    ~ ' | 전체 목록: mgmt 서버 ansible/' ~ u15_log)
+                   if (u15_pod + u15_other) | length > 0 else ': 없음')
     }] }}"
 
 
