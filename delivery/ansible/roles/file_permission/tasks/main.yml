@@ -1,7 +1,7 @@
 ---
-# roles/file_permission — 서버 U-14~U-30 계열(파일 및 디렉터리 권한) 점검
+# U-14~U-33, U-62, U-67 파일 및 디렉터리 관리
 
-# U-14 | PATH 환경변수 관리 (PATH에 "." 포함 금지)
+# U-14 | root 홈, 패스 디렉터리 권한 및 패스 설정
 - name: "U-14 | root PATH 조회"
   ansible.builtin.shell: "set -o pipefail && grep -h '^\\s*PATH=' /etc/profile /root/.bash_profile /root/.bashrc 2>/dev/null"
   args:
@@ -12,17 +12,24 @@
 
 - name: "U-14 | 판정 기록"
   vars:
-    u14_has_dot: "{{ (':.:' in ((u14_raw.stdout | default('')) ~ ':')) or ((u14_raw.stdout | default('')) is search('PATH=\\.:|:\\.$|::')) }}"
+    u14_has_dot: "{{ (u14_raw.stdout | default('')) is search('PATH=[^:./$A-Za-z0-9]?(\\.(:|\\W*$)|:)|:\\.:|::', multiline=True) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-14', 'item': 'PATH 환경변수 관리',
+      'id': 'U-14', 'item': 'root 홈, 패스 디렉터리 권한 및 패스 설정',
       'status': 'FAIL' if u14_has_dot else 'PASS',
       'detail': u14_raw.stdout | default('PATH 설정 조회 실패(기본값 사용 중으로 간주, 참고 필요)', true) | truncate(200)
     }] }}"
 
-# U-15 | 불필요한 파일 및 디렉터리 제거 (무소유자 파일 0건 기준)
-- name: "U-15 | 무소유자·무그룹 파일 조회 (로컬 파일시스템만, -xdev)"
-  ansible.builtin.shell: "set -o pipefail && timeout 60 find / -xdev {% for d in u15_unowned_exclude_dirs %}-path {{ d | quote }} -prune -o {% endfor %}\\( -nouser -o -nogroup \\) -print 2>/dev/null | head -20"
+# U-15 | 파일 및 디렉터리 소유자 설정
+- name: "U-15 | 무소유자·무그룹 파일 조회 (디스크 마운트별, 제외 경로 반영)"
+  ansible.builtin.shell: |
+    set -o pipefail
+    mnts=$(findmnt -rn -o TARGET -t ext2,ext3,ext4,xfs,btrfs 2>/dev/null | sort -u)
+    for m in ${mnts:-/}; do
+      case "$m" in /var/lib/kubelet|/var/lib/kubelet/*|/var/lib/containerd|/var/lib/containerd/*{% for d in u15_unowned_exclude_dirs %}|{{ d }}|{{ d }}/*{% endfor %}) continue ;; esac
+      timeout 300 find "$m" -xdev \( {% for d in u15_unowned_exclude_dirs %}{{ '-o ' if not loop.first }}-path {{ d | quote }} {% endfor %}\) -prune -o \( -nouser -o -nogroup \) -print 2>/dev/null
+      [ $? -eq 124 ] && echo "SCAN_TIMEOUT:$m"
+    done | sort -u
   args:
     executable: /bin/bash
   register: u15_raw
@@ -30,14 +37,20 @@
   failed_when: false
 
 - name: "U-15 | 판정 기록"
+  vars:
+    u15_timeout: "{{ u15_raw.stdout_lines | default([]) | select('match', '^SCAN_TIMEOUT:') | map('replace', 'SCAN_TIMEOUT:', '') | list }}"
+    u15_files: "{{ u15_raw.stdout_lines | default([]) | reject('match', '^SCAN_TIMEOUT:') | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-15', 'item': '불필요한 파일 및 디렉터리 제거(무소유자 파일)',
+      'id': 'U-15', 'item': '파일 및 디렉터리 소유자 설정',
       'status': 'PASS' if (u15_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '무소유자/무그룹 파일(최대 20건 표시, 제외 경로: ' ~ (u15_unowned_exclude_dirs | join(', ')) ~ '): ' ~ (u15_raw.stdout | default('없음', true))
+      'detail': (('검색 시간 제한(300초) 초과 — 일부만 확인됨(' ~ (u15_timeout | join(', ')) ~ ') / ') if u15_timeout | length > 0 else '')
+                ~ '무소유자/무그룹 파일 ' ~ (u15_files | length) ~ '건(최대 20건 표시, 제외 경로: ' ~ (u15_unowned_exclude_dirs | join(', ')) ~ '): '
+                ~ (u15_files[:20] | join(', ') if u15_files | length > 0 else '없음')
     }] }}"
 
-# U-16 | /etc/passwd 파일 보호
+
+# U-16 | /etc/passwd 파일 소유자 및 권한 설정
 - name: "U-16 | /etc/passwd 상태 조회"
   ansible.builtin.stat:
     path: /etc/passwd
@@ -48,29 +61,36 @@
     u16_ok: "{{ (u16_stat.stat.mode | int(base=8)) <= (u16_passwd_perm_max | int(base=8)) and u16_stat.stat.pw_name == 'root' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-16', 'item': '/etc/passwd 파일 보호',
+      'id': 'U-16', 'item': '/etc/passwd 파일 소유자 및 권한 설정',
       'status': 'PASS' if u16_ok else 'FAIL',
       'detail': 'owner=' ~ u16_stat.stat.pw_name ~ ' mode=' ~ u16_stat.stat.mode ~ ' (기준 <= ' ~ u16_passwd_perm_max ~ ', root 소유)'
     }] }}"
 
-# U-17 | 링크 파일 보호 (주요 파일이 심볼릭 링크면 FAIL)
-- name: "U-17 | 주요 파일 링크 여부 조회"
-  ansible.builtin.stat:
-    path: "{{ item }}"
-  register: u17_stats
-  loop: "{{ u17_protected_files }}"
+# U-17 | 시스템 시작 스크립트 권한 설정
+- name: "U-17 | 시스템 시작 스크립트 소유자·권한 위반 조회"
+  ansible.builtin.shell: |
+    set -o pipefail
+    {
+      [ -d /etc/systemd/system ] && find -L /etc/systemd/system -type f \( ! -user root -o -perm -0002 \) 2>/dev/null
+      [ -d /etc/rc.d ] && find -L /etc/rc.d -mindepth 2 -type f \( ! -user root -o -perm -0002 \) 2>/dev/null
+      true
+    } | sort -u
+  args:
+    executable: /bin/bash
+  register: u17_raw
+  changed_when: false
+  failed_when: false
 
 - name: "U-17 | 판정 기록"
-  vars:
-    u17_links: "{{ u17_stats.results | selectattr('stat.islnk', 'defined') | selectattr('stat.islnk', 'equalto', true) | map(attribute='item') | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-17', 'item': '링크 파일 보호',
-      'status': 'PASS' if u17_links | length == 0 else 'FAIL',
-      'detail': '심볼릭 링크로 존재하는 주요 파일: ' ~ (u17_links | join(', ') if u17_links | length > 0 else '없음')
+      'id': 'U-17', 'item': '시스템 시작 스크립트 권한 설정',
+      'status': 'PASS' if (u17_raw.stdout | default('') | length == 0) else 'FAIL',
+      'detail': '소유자가 root가 아니거나 일반 사용자 쓰기 권한이 있는 시작 스크립트(/etc/systemd/system, /etc/rc.d): '
+                ~ ((u17_raw.stdout_lines | default([])) | join(', ') if u17_raw.stdout | default('') | length > 0 else '없음')
     }] }}"
 
-# U-18 | /etc/shadow 파일 보호
+# U-18 | /etc/shadow 파일 소유자 및 권한 설정
 - name: "U-18 | /etc/shadow 상태 조회"
   ansible.builtin.stat:
     path: /etc/shadow
@@ -81,12 +101,12 @@
     u18_ok: "{{ (u18_stat.stat.mode | int(base=8)) <= (u18_shadow_perm_max | int(base=8)) and u18_stat.stat.pw_name == 'root' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-18', 'item': '/etc/shadow 파일 보호',
+      'id': 'U-18', 'item': '/etc/shadow 파일 소유자 및 권한 설정',
       'status': 'PASS' if u18_ok else 'FAIL',
       'detail': 'owner=' ~ u18_stat.stat.pw_name ~ ' mode=' ~ u18_stat.stat.mode ~ ' (기준 <= ' ~ u18_shadow_perm_max ~ ', root 소유)'
     }] }}"
 
-# U-19 | /etc/hosts 파일 보호
+# U-19 | /etc/hosts 파일 소유자 및 권한 설정
 - name: "U-19 | /etc/hosts 상태 조회"
   ansible.builtin.stat:
     path: /etc/hosts
@@ -97,12 +117,12 @@
     u19_ok: "{{ (u19_stat.stat.mode | int(base=8)) <= (u19_hosts_perm_max | int(base=8)) and u19_stat.stat.pw_name == 'root' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-19', 'item': '/etc/hosts 파일 보호',
+      'id': 'U-19', 'item': '/etc/hosts 파일 소유자 및 권한 설정',
       'status': 'PASS' if u19_ok else 'FAIL',
       'detail': 'owner=' ~ u19_stat.stat.pw_name ~ ' mode=' ~ u19_stat.stat.mode ~ ' (기준 <= ' ~ u19_hosts_perm_max ~ ', root 소유)'
     }] }}"
 
-# U-20 | xinetd.conf 및 관련 파일 보호 (xinetd 미사용 시 파일 없으면 PASS)
+# U-20 | /etc/(x)inetd.conf 파일 소유자 및 권한 설정
 - name: "U-20 | xinetd.conf 상태 조회"
   ansible.builtin.stat:
     path: /etc/xinetd.conf
@@ -113,12 +133,12 @@
     u20_ok: "{{ not u20_stat.stat.exists or ((u20_stat.stat.mode | int(base=8)) <= (u20_xinetd_perm_max | int(base=8)) and u20_stat.stat.pw_name == 'root') }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-20', 'item': 'xinetd.conf 및 관련 파일 보호',
+      'id': 'U-20', 'item': '/etc/(x)inetd.conf 파일 소유자 및 권한 설정',
       'status': 'PASS' if u20_ok else 'FAIL',
       'detail': ('xinetd.conf 없음(미사용, 양호)' if not u20_stat.stat.exists else ('owner=' ~ u20_stat.stat.pw_name ~ ' mode=' ~ u20_stat.stat.mode ~ ' (기준 <= ' ~ u20_xinetd_perm_max ~ ')'))
     }] }}"
 
-# U-21 | rsyslog.conf 파일 보호
+# U-21 | /etc/(r)syslog.conf 파일 소유자 및 권한 설정
 - name: "U-21 | rsyslog.conf 상태 조회"
   ansible.builtin.stat:
     path: /etc/rsyslog.conf
@@ -137,7 +157,7 @@
     u21_journald_active: "{{ (u21_journald_raw.stdout | default('') | trim) == 'active' if u21_journald_raw is defined else false }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-21', 'item': 'rsyslog.conf 파일 보호',
+      'id': 'U-21', 'item': '/etc/(r)syslog.conf 파일 소유자 및 권한 설정',
       'status': (
         'PASS' if u21_ok
         else ('N/A' if (not u21_stat.stat.exists and u21_journald_active)
@@ -150,7 +170,7 @@
       )
     }] }}"
 
-# U-22 | services 파일 보호
+# U-22 | /etc/services 파일 소유자 및 권한 설정
 - name: "U-22 | /etc/services 상태 조회"
   ansible.builtin.stat:
     path: /etc/services
@@ -161,14 +181,21 @@
     u22_ok: "{{ (u22_stat.stat.mode | int(base=8)) <= (u22_services_perm_max | int(base=8)) and u22_stat.stat.pw_name == 'root' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-22', 'item': 'services 파일 보호',
+      'id': 'U-22', 'item': '/etc/services 파일 소유자 및 권한 설정',
       'status': 'PASS' if u22_ok else 'FAIL',
       'detail': 'owner=' ~ u22_stat.stat.pw_name ~ ' mode=' ~ u22_stat.stat.mode ~ ' (기준 <= ' ~ u22_services_perm_max ~ ')'
     }] }}"
 
-# U-23 | SUID/SGID 설정 점검 [확정 기준값: group_vars/all.yml]
-- name: "U-23 | SUID/SGID 파일 조회 (로컬 파일시스템만, -xdev)"
-  ansible.builtin.shell: "set -o pipefail && timeout 90 find / -xdev {% for d in u23_suid_exclude_dirs %}-path {{ d | quote }} -prune -o {% endfor %}-type f \\( -perm -4000 -o -perm -2000 \\) -print 2>/dev/null"
+# U-23 | SUID, SGID, Sticky bit 설정 파일 점검
+- name: "U-23 | SUID/SGID 파일 조회 (디스크 마운트별, 제외 경로 반영)"
+  ansible.builtin.shell: |
+    set -o pipefail
+    mnts=$(findmnt -rn -o TARGET -t ext2,ext3,ext4,xfs,btrfs 2>/dev/null | sort -u)
+    for m in ${mnts:-/}; do
+      case "$m" in /var/lib/kubelet|/var/lib/kubelet/*|/var/lib/containerd|/var/lib/containerd/*{% for d in u23_suid_exclude_dirs %}|{{ d }}|{{ d }}/*{% endfor %}) continue ;; esac
+      timeout 300 find "$m" -xdev \( {% for d in u23_suid_exclude_dirs %}{{ '-o ' if not loop.first }}-path {{ d | quote }} {% endfor %}\) -prune -o -type f \( -perm -4000 -o -perm -2000 \) -print 2>/dev/null
+      [ $? -eq 124 ] && echo "SCAN_TIMEOUT:$m"
+    done | sort -u
   args:
     executable: /bin/bash
   register: u23_raw
@@ -177,24 +204,30 @@
 
 - name: "U-23 | 판정 기록"
   vars:
-    u23_found: "{{ u23_raw.stdout_lines | default([]) }}"
+    u23_timeout: "{{ u23_raw.stdout_lines | default([]) | select('match', '^SCAN_TIMEOUT:') | map('replace', 'SCAN_TIMEOUT:', '') | list }}"
+    u23_found: "{{ u23_raw.stdout_lines | default([]) | reject('match', '^SCAN_TIMEOUT:') | list }}"
     u23_unauthorized: "{{ u23_found | difference(u23_allowed_suid_sgid) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-23', 'item': 'SUID/SGID 설정 점검',
-      'status': 'PASS' if u23_unauthorized | length == 0 else 'FAIL',
-      'detail': '화이트리스트 밖 SUID/SGID 파일(제외 경로: ' ~ (u23_suid_exclude_dirs | join(', ')) ~ '): ' ~ (u23_unauthorized | join(', ') if u23_unauthorized | length > 0 else '없음')
+      'id': 'U-23', 'item': 'SUID, SGID, Sticky bit 설정 파일 점검',
+      'status': 'PASS' if (u23_unauthorized | length == 0 and u23_timeout | length == 0) else 'FAIL',
+      'detail': (('검색 시간 제한(300초) 초과 — 일부만 확인됨(' ~ (u23_timeout | join(', ')) ~ ') / ') if u23_timeout | length > 0 else '')
+                ~ '화이트리스트 밖 SUID/SGID 파일(제외 경로: ' ~ (u23_suid_exclude_dirs | join(', ')) ~ '): ' ~ (u23_unauthorized | join(', ') if u23_unauthorized | length > 0 else '없음')
     }] }}"
 
-# U-24 | 사용자 환경 파일 보호 (그룹/전체 쓰기 권한 금지)
-- name: "U-24 | 사용자 환경파일 쓰기권한 조회"
-  ansible.builtin.shell: >
-    set -o pipefail &&
-    for h in $(awk -F: '$3>=1000 && $7 !~ /nologin|false/ {print $6}' /etc/passwd); do
+
+# U-24 | 사용자, 시스템 환경변수 파일 소유자 및 권한 설정
+- name: "U-24 | 환경변수 파일 소유자·쓰기권한 조회"
+  ansible.builtin.shell: |
+    set -o pipefail
+    while IFS=: read -r acct home; do
       for f in {{ u24_user_env_files | join(' ') }}; do
-        [ -f "$h/$f" ] && find "$h/$f" -perm -022 -print 2>/dev/null
+        [ -f "$home/$f" ] || continue
+        owner=$(stat -c '%U' "$home/$f")
+        [ "$owner" != "root" ] && [ "$owner" != "$acct" ] && echo "OWNER:$home/$f(owner=$owner)"
+        find "$home/$f" -perm /022 -printf 'WRITABLE:%p(perm=%m)\n' 2>/dev/null
       done
-    done
+    done < <(awk -F: '$1=="root" || ($3>=1000 && $7 !~ /nologin|false/) {print $1":"$6}' /etc/passwd)
   args:
     executable: /bin/bash
   register: u24_raw
@@ -204,18 +237,21 @@
 - name: "U-24 | 판정 기록"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-24', 'item': '사용자 환경 파일 보호',
+      'id': 'U-24', 'item': '사용자, 시스템 환경변수 파일 소유자 및 권한 설정',
       'status': 'PASS' if (u24_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '그룹/전체 쓰기권한 있는 환경파일: ' ~ (u24_raw.stdout | default('없음', true))
+      'detail': '소유자(root/해당 계정 아님) 또는 그룹/전체 쓰기권한 위반 환경파일: ' ~ ((u24_raw.stdout_lines | default([])) | join(', ') if u24_raw.stdout | default('') | length > 0 else '없음')
     }] }}"
 
 # U-25 | world writable 파일 점검
-- name: "U-25 | world writable 파일 조회 (제외 경로 반영, -xdev)"
-  ansible.builtin.shell: >
-    set -o pipefail &&
-    timeout 90 find / -xdev -type f -perm -0002
-    {% for d in u25_world_writable_exclude_dirs %}-not -path "{{ d }}/*" {% endfor %}
-    2>/dev/null | head -20
+- name: "U-25 | world writable 파일 조회 (디스크 마운트별, 제외 경로 반영)"
+  ansible.builtin.shell: |
+    set -o pipefail
+    mnts=$(findmnt -rn -o TARGET -t ext2,ext3,ext4,xfs,btrfs 2>/dev/null | sort -u)
+    for m in ${mnts:-/}; do
+      case "$m" in /var/lib/kubelet|/var/lib/kubelet/*|/var/lib/containerd|/var/lib/containerd/*{% for d in u25_world_writable_exclude_dirs %}|{{ d }}|{{ d }}/*{% endfor %}) continue ;; esac
+      timeout 300 find "$m" -xdev \( {% for d in u25_world_writable_exclude_dirs %}{{ '-o ' if not loop.first }}-path {{ d | quote }} {% endfor %}\) -prune -o -type f -perm -0002 -print 2>/dev/null
+      [ $? -eq 124 ] && echo "SCAN_TIMEOUT:$m"
+    done | sort -u
   args:
     executable: /bin/bash
   register: u25_raw
@@ -223,18 +259,23 @@
   failed_when: false
 
 - name: "U-25 | 판정 기록"
+  vars:
+    u25_timeout: "{{ u25_raw.stdout_lines | default([]) | select('match', '^SCAN_TIMEOUT:') | map('replace', 'SCAN_TIMEOUT:', '') | list }}"
+    u25_files: "{{ u25_raw.stdout_lines | default([]) | reject('match', '^SCAN_TIMEOUT:') | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-25', 'item': 'world writable 파일 점검',
       'status': 'PASS' if (u25_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': 'world writable 파일(최대 20건, 표준 제외경로 밖): ' ~ (u25_raw.stdout | default('없음', true))
+      'detail': (('검색 시간 제한(300초) 초과 — 일부만 확인됨(' ~ (u25_timeout | join(', ')) ~ ') / ') if u25_timeout | length > 0 else '')
+                ~ 'world writable 파일 ' ~ (u25_files | length) ~ '건(최대 20건, 표준 제외경로 밖): ' ~ (u25_files[:20] | join(', ') if u25_files | length > 0 else '없음')
     }] }}"
 
-# U-26 | 중요 디바이스 파일 보호 (스냅샷 대조, 값 없으면 SKIP)
-- name: "U-26 | 현재 /dev 디바이스 노드 목록 조회(재귀)"
+
+# U-26 | /dev에 존재하지 않는 device 파일 점검
+- name: "U-26 | /dev 내 일반 파일(device 아닌 파일) 조회"
   ansible.builtin.shell: >
     set -o pipefail &&
-    find /dev -mindepth 1 \( -type c -o -type b \) 2>/dev/null
+    find /dev -type f 2>/dev/null
     | grep -v -E '^/dev/({{ u26_dev_exclude_dirs | join('|') }})/'
     | sort
   args:
@@ -242,51 +283,51 @@
   register: u26_raw
   changed_when: false
   failed_when: false
-  when: u26_dev_baseline_snapshot | length > 0
 
 - name: "U-26 | 판정 기록"
-  vars:
-    u26_current: "{{ u26_raw.stdout_lines | default([]) }}"
-    u26_new_entries: "{{ u26_current | difference(u26_dev_baseline_snapshot) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-26', 'item': '중요 디바이스 파일 보호',
-      'status': (
-        'SKIP' if u26_dev_baseline_snapshot | length == 0 else
-        ('PASS' if u26_new_entries | length == 0 else 'FAIL')
-      ),
-      'detail': (
-        '기준 스냅샷(u26_dev_baseline_snapshot) 미확정 — 파일럿 VM에서 추출 필요' if u26_dev_baseline_snapshot | length == 0
-        else '스냅샷 대비 신규 디바이스 파일: ' ~ (u26_new_entries | join(', ') if u26_new_entries | length > 0 else '없음')
-      )
+      'id': 'U-26', 'item': '/dev에 존재하지 않는 device 파일 점검',
+      'status': 'PASS' if (u26_raw.stdout | default('') | length == 0) else 'FAIL',
+      'detail': '/dev 내 device가 아닌 일반 파일(' ~ (u26_dev_exclude_dirs | join('·')) ~ ' 제외): '
+                ~ ((u26_raw.stdout_lines | default([])) | join(', ') if u26_raw.stdout | default('') | length > 0 else '없음')
     }] }}"
 
-# U-27 | hosts.equiv / .rhosts 파일 보호
-- name: "U-27 | /etc/hosts.equiv 상태 조회"
-  ansible.builtin.stat:
-    path: /etc/hosts.equiv
-  register: u27_equiv_stat
-
-- name: "U-27 | 사용자 홈 .rhosts 조회"
-  ansible.builtin.shell: "set -o pipefail && for h in $(awk -F: '{print $6}' /etc/passwd); do [ -f \"$h/.rhosts\" ] && echo \"$h/.rhosts\"; done"
+# U-27 | $HOME/.rhosts, hosts.equiv 사용 금지
+- name: "U-27 | r 계열 서비스 사용 여부 및 hosts.equiv·.rhosts 설정 조회"
+  ansible.builtin.shell: |
+    set -o pipefail
+    if [ "$(systemctl is-active rlogin.socket rsh.socket rexec.socket 2>/dev/null | grep -c '^active')" = "0" ]; then
+      echo "R_SERVICES_INACTIVE"; exit 0
+    fi
+    check() {
+      [ -f "$1" ] || return 0
+      owner=$(stat -c '%U' "$1"); perm=$(stat -c '%a' "$1")
+      [ "$owner" != "root" ] && [ "$owner" != "$2" ] && echo "OWNER:$1(owner=$owner)"
+      [ $(( 0$perm & ~0{{ u27_hosts_equiv_perm_max }} & 0777 )) -ne 0 ] && echo "PERM:$1(perm=$perm)"
+      grep -qE '^[[:space:]]*\+' "$1" && echo "PLUS:$1"
+      return 0
+    }
+    check /etc/hosts.equiv root
+    while IFS=: read -r acct home; do check "$home/.rhosts" "$acct"; done < <(awk -F: '{print $1":"$6}' /etc/passwd)
   args:
     executable: /bin/bash
-  register: u27_rhosts_raw
+  register: u27_raw
   changed_when: false
   failed_when: false
 
 - name: "U-27 | 판정 기록"
   vars:
-    u27_equiv_ok: "{{ not u27_equiv_stat.stat.exists or (u27_equiv_stat.stat.mode | int(base=8)) <= (u27_hosts_equiv_perm_max | int(base=8)) }}"
-    u27_rhosts_found: "{{ u27_rhosts_raw.stdout_lines | default([]) }}"
+    u27_inactive: "{{ (u27_raw.stdout | default('') | trim) == 'R_SERVICES_INACTIVE' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-27', 'item': 'hosts.equiv / .rhosts 파일 보호',
-      'status': 'PASS' if (u27_equiv_ok and u27_rhosts_found | length == 0) else 'FAIL',
-      'detail': 'hosts.equiv exists=' ~ (u27_equiv_stat.stat.exists | string) ~ ' / 발견된 .rhosts: ' ~ (u27_rhosts_found | join(', ') if u27_rhosts_found | length > 0 else '없음')
+      'id': 'U-27', 'item': '$HOME/.rhosts, hosts.equiv 사용 금지',
+      'status': 'PASS' if (u27_inactive or u27_raw.stdout | default('') | length == 0) else 'FAIL',
+      'detail': ('rlogin/rsh/rexec 서비스 미사용' if u27_inactive
+                 else '소유자·권한(' ~ u27_hosts_equiv_perm_max ~ ' 이하)·+ 설정 위반: ' ~ ((u27_raw.stdout_lines | default([])) | join(', ') if u27_raw.stdout | default('') | length > 0 else '없음'))
     }] }}"
 
-# U-28 | IP 기반 접근제어 (SG 22번 인바운드 부재 + SSM Session Manager 대체 기준)
+# U-28 | 접속 IP 및 포트 제한
 - name: "U-28 | 대상 인스턴스 EC2 메타데이터 조회(instance-id)"
   amazon.aws.ec2_metadata_facts:
   ignore_errors: true
@@ -318,7 +359,7 @@
     u28_ssh_open: "{{ (u28_ssh_rules | flatten | length) > 0 }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-28', 'item': 'IP 기반 접근제어',
+      'id': 'U-28', 'item': '접속 IP 및 포트 제한',
       'status': (
         'SKIP' if not u28_lookup_ok else
         ('FAIL' if u28_ssh_open else 'PASS')
@@ -330,7 +371,7 @@
       )
     }] }}"
 
-# U-29 | hosts.lpd 파일 보호
+# U-29 | hosts.lpd 파일 소유자 및 권한 설정
 - name: "U-29 | /etc/hosts.lpd 상태 조회"
   ansible.builtin.stat:
     path: /etc/hosts.lpd
@@ -338,15 +379,15 @@
 
 - name: "U-29 | 판정 기록"
   vars:
-    u29_ok: "{{ not u29_stat.stat.exists or (u29_stat.stat.mode | int(base=8)) <= (u29_hosts_lpd_perm_max | int(base=8)) }}"
+    u29_ok: "{{ not u29_stat.stat.exists or ((u29_stat.stat.mode | int(base=8)) <= (u29_hosts_lpd_perm_max | int(base=8)) and u29_stat.stat.pw_name == 'root') }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-29', 'item': 'hosts.lpd 파일 보호',
+      'id': 'U-29', 'item': 'hosts.lpd 파일 소유자 및 권한 설정',
       'status': 'PASS' if u29_ok else 'FAIL',
-      'detail': ('hosts.lpd 없음(미사용, 양호)' if not u29_stat.stat.exists else ('mode=' ~ u29_stat.stat.mode ~ ' (기준 <= ' ~ u29_hosts_lpd_perm_max ~ ')'))
+      'detail': ('hosts.lpd 없음(미사용, 양호)' if not u29_stat.stat.exists else ('owner=' ~ u29_stat.stat.pw_name ~ ' mode=' ~ u29_stat.stat.mode ~ ' (기준: root, ' ~ u29_hosts_lpd_perm_max ~ ' 이하)'))
     }] }}"
 
-# U-30 | UMASK 설정
+# U-30 | UMASK 설정 관리
 - name: "U-30 | UMASK 설정 조회"
   ansible.builtin.shell: "set -o pipefail && grep -rh '^\\s*umask' /etc/profile /etc/bashrc /etc/login.defs 2>/dev/null | head -1"
   args:
@@ -360,14 +401,24 @@
     u30_value: "{{ (u30_raw.stdout | default('') | regex_search('[0-7]{3,4}')) | default('022', true) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-30', 'item': 'UMASK 설정',
+      'id': 'U-30', 'item': 'UMASK 설정 관리',
       'status': 'PASS' if ((u30_value | int(base=8)) >= (u30_umask_min | int(base=8))) else 'FAIL',
       'detail': u30_raw.stdout | default('UMASK 명시 설정 없음(시스템 기본값 022로 간주)', true)
     }] }}"
 
-# U-31 | 숨김 디렉터리 점검 (N/A 확정 — OS/도구 표준 항목 외 발견 시 FAIL)
-- name: "U-31 | 사용자 홈 숨김 디렉터리 조회"
-  ansible.builtin.shell: "set -o pipefail && for h in $(awk -F: '$3>=1000 {print $6}' /etc/passwd); do find \"$h\" -maxdepth 1 -type d -name '.*' 2>/dev/null | grep -vE '(^\\.$|/\\.\\.?$)'; done"
+# U-31 | 홈디렉토리 소유자 및 권한 설정
+- name: "U-31 | 홈 디렉토리 소유자·권한 위반 조회"
+  ansible.builtin.shell: |
+    set -o pipefail
+    while IFS=: read -r acct home; do
+      [ -d "$home" ] || continue
+      owner=$(stat -c '%U' "$home")
+      perm=$(stat -c '%a' "$home")
+      [ "$owner" != "$acct" ] && echo "OWNER_MISMATCH:${acct}:${home}:owner=${owner}"
+      if [ $(( 0${perm} & 0002 )) -ne 0 ]; then
+        echo "OTHER_WRITABLE:${acct}:${home}:perm=${perm}"
+      fi
+    done < <(awk -F: '$3>=1000 && $7 !~ /nologin|false/ {print $1":"$6}' /etc/passwd)
   args:
     executable: /bin/bash
   register: u31_raw
@@ -375,85 +426,104 @@
   failed_when: false
 
 - name: "U-31 | 판정 기록"
-  vars:
-    u31_found: "{{ u31_raw.stdout_lines | default([]) | map('basename') | list }}"
-    u31_unauthorized: "{{ u31_found | difference(u31_os_baseline_hidden_entries | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-31', 'item': '숨김 디렉터리 점검',
-      'status': 'FAIL' if u31_unauthorized | length > 0 else 'PASS',
-      'detail': (
-        'OS/도구 표준 항목 외 숨김 디렉터리 발견: ' ~ (u31_unauthorized | join(', ')) if u31_unauthorized | length > 0
-        else '사용자 정의 숨김 디렉터리 없음(OS 기본 항목만 존재) — 위반 없음 확인'
-      )
+      'id': 'U-31', 'item': '홈디렉토리 소유자 및 권한 설정',
+      'status': 'PASS' if (u31_raw.stdout | default('') | length == 0) else 'FAIL',
+      'detail': '위반 사항: ' ~ ((u31_raw.stdout_lines | default([])) | join('; ') if u31_raw.stdout | default('') | length > 0 else '없음')
     }] }}"
 
-# U-33 | 불필요한 파일 제거 (표준 도구 경로 제외, 없으면 PASS)
-- name: "U-33 | 업무 파일 배치 경로 조회 (표준 도구 경로 제외)"
-  ansible.builtin.shell: >
-    set -o pipefail &&
-    for d in {{ u33_business_file_dirs | join(' ') }}; do
-    [ -d "$d" ] && find "$d" -mindepth 1
-    {% for e in u33_business_file_exclude_dirs %}-not -path "{{ e }}" -not -path "{{ e }}/*" {% endfor %}
-    2>/dev/null;
-    done
+# U-33 | 숨겨진 파일 및 디렉토리 검색 및 제거
+- name: "U-33 | 숨겨진 파일·디렉토리 전체 조회 및 분류(허용 목록 / RPM 패키지 소유 / 확인 필요)"
+  ansible.builtin.shell: |
+    set -o pipefail
+    allowed=( {% for p in u33_hidden_allowed_paths %}{{ p | quote }} {% endfor %})
+    mnts=$(findmnt -rn -o TARGET -t ext2,ext3,ext4,xfs,btrfs 2>/dev/null | sort -u)
+    found=$(for m in ${mnts:-/} /tmp /var/tmp /dev/shm; do
+      case "$m" in /var/lib/kubelet|/var/lib/kubelet/*|/var/lib/containerd|/var/lib/containerd/*{% for d in u33_hidden_exclude_dirs %}|{{ d }}|{{ d }}/*{% endfor %}) continue ;; esac
+      timeout 300 find "$m" -xdev \( {% for d in u33_hidden_exclude_dirs %}{{ '-o ' if not loop.first }}-path {{ d | quote }} {% endfor %}\) -prune -o -name '.*' -print 2>/dev/null
+      [ $? -eq 124 ] && echo "SCAN_TIMEOUT:$m"
+    done | sort -u)
+    grep '^SCAN_TIMEOUT:' <<< "$found"
+    found=$(grep -v '^SCAN_TIMEOUT:' <<< "$found")
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      for a in "${allowed[@]}"; do
+        case "$p" in $a|$a/*) echo "ALLOW|$p|허용 목록"; continue 2 ;; esac
+      done
+      if pkg=$(rpm -qf --qf '%{NAME}\n' -- "$p" 2>/dev/null); then
+        echo "RPM|$p|${pkg%%$'\n'*}"
+      else
+        echo "FLAG|$p|"
+      fi
+    done <<< "$found"
   args:
     executable: /bin/bash
   register: u33_raw
   changed_when: false
   failed_when: false
 
+- name: "U-33 | 전체 검색 결과 로그 저장(mgmt 서버 ./results)"
+  ansible.builtin.copy:
+    content: "{{ '# U-33 숨김 파일 전체 검색 — ' ~ inventory_hostname ~ ' ' ~ ansible_date_time.iso8601 ~ '\n# 분류|경로|사유(허용 목록 / RPM 패키지명, FLAG=확인 필요)\n' ~ (u33_raw.stdout | default('')) ~ '\n' }}"
+    dest: "./results/{{ inventory_hostname }}_u33_hidden_{{ ansible_date_time.date }}.log"
+  delegate_to: localhost
+
 - name: "U-33 | 판정 기록"
+  vars:
+    u33_lines: "{{ u33_raw.stdout_lines | default([]) }}"
+    u33_flagged: "{{ u33_lines | select('match', '^FLAG\\|') | map('regex_replace', '^FLAG\\|(.*)\\|$', '\\1') | list }}"
+    u33_timeout: "{{ u33_lines | select('match', '^SCAN_TIMEOUT:') | list | length > 0 }}"
+    u33_log: "{{ 'results/' ~ inventory_hostname ~ '_u33_hidden_' ~ ansible_date_time.date ~ '.log' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-33', 'item': '불필요한 파일 제거',
-      'status': 'FAIL' if (u33_raw.stdout | default('') | length > 0) else 'PASS',
-      'detail': (
-        '업무 파일 배치 경로(' ~ (u33_business_file_dirs | join(', ')) ~ ')에서 표준 도구 경로 밖 파일 발견: ' ~ u33_raw.stdout if (u33_raw.stdout | default('') | length > 0)
-        else '업무 파일 배치 경로 확인 — 표준 도구 외 파일 없음(위반 없음 확인)'
-      )
+      'id': 'U-33', 'item': '숨겨진 파일 및 디렉토리 검색 및 제거',
+      'status': 'PASS' if (u33_flagged | length == 0 and not u33_timeout) else 'FAIL',
+      'detail': ('검색 시간 제한(300초) 초과 — 일부만 확인됨 / ' if u33_timeout else '')
+                ~ '숨겨진 파일·디렉토리 ' ~ (u33_lines | select('match', '^(ALLOW|RPM|FLAG)\\|') | list | length) ~ '건 중 '
+                ~ '허용 목록 ' ~ (u33_lines | select('match', '^ALLOW\\|') | list | length) ~ '건, OS 패키지(RPM) 소유 '
+                ~ (u33_lines | select('match', '^RPM\\|') | list | length) ~ '건, 확인 필요 ' ~ (u33_flagged | length) ~ '건'
+                ~ ((': ' ~ (u33_flagged[:200] | join(', ')) ~ (' 외 ' ~ (u33_flagged | length - 200) ~ '건' if u33_flagged | length > 200 else ''))
+                   if u33_flagged | length > 0 else '')
+                ~ ' | 전체 목록: mgmt 서버 ansible/' ~ u33_log
     }] }}"
 
-# U-62 | 로그인 시 경고 메시지 설정 (Telnet/FTP/SMTP/DNS 미사용 확정, [서버] 갈래만 실측)
-- name: "U-62 | /etc/motd 내용 조회"
-  ansible.builtin.command: cat /etc/motd
-  register: u62_motd_raw
-  changed_when: false
-  failed_when: false
 
-- name: "U-62 | /etc/issue 내용 조회"
-  ansible.builtin.command: cat /etc/issue
-  register: u62_issue_raw
+# U-62 | 로그인 시 경고 메시지 설정
+- name: "U-62 | 로그온 배너 파일의 배포판 기본값 외 문구 조회"
+  ansible.builtin.shell: |
+    files="/etc/motd /etc/issue /etc/issue.net"
+    b=$(sshd -T 2>/dev/null | awk '$1=="banner"{print $2}')
+    [ -n "$b" ] && [ "$b" != "none" ] && files="$files $b"
+    for f in $files; do
+      [ -f "$f" ] || continue
+      sed -E 's/\\[A-Za-z]//g; /^[[:space:]]*Kernel[[:space:]]+on an[[:space:]]*(\(\))?[[:space:]]*$/d; /^[[:space:]]*$/d' "$f" \
+        | head -2 | cut -c1-80 | sed "s|^|$f: |"
+    done
+    true
+  args:
+    executable: /bin/bash
+  register: u62_raw
   changed_when: false
   failed_when: false
 
 - name: "U-62 | 판정 기록"
-  vars:
-    u62_motd: "{{ u62_motd_raw.stdout | default('') | trim }}"
-    u62_issue: "{{ u62_issue_raw.stdout | default('') | trim }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-62', 'item': '로그인 시 경고 메시지 설정',
-      'status': 'PASS' if (u62_motd | length > 0 or u62_issue | length > 0) else 'FAIL',
-      'detail': 'Telnet/FTP/SMTP/DNS는 미사용 확정(해당없음) — 원문 [서버] 갈래만 실측: /etc/motd=' ~ (u62_motd | truncate(80) if u62_motd | length > 0 else '없음(빈 파일 또는 미존재)') ~ ' / /etc/issue=' ~ (u62_issue | truncate(80) if u62_issue | length > 0 else '없음(빈 파일 또는 미존재)')
+      'status': 'PASS' if (u62_raw.stdout | default('') | length > 0) else 'FAIL',
+      'detail': 'Telnet/FTP/SMTP/DNS는 미사용 확정(해당없음) — 서버 로그온 배너(/etc/motd·/etc/issue·/etc/issue.net·sshd Banner)의 경고 문구: '
+                ~ ((u62_raw.stdout_lines | default([])) | join(' / ') if u62_raw.stdout | default('') | length > 0
+                   else '없음(비어 있거나 배포판 기본값(OS·커널 정보)만 있음)')
     }] }}"
 
-# U-32 | 홈 디렉터리 관리 (소유자 일치, 그룹/전체 쓰기 금지)
-- name: "U-32 | 홈 디렉터리 소유자·권한 위반 조회"
+# U-32 | 홈 디렉토리로 지정한 디렉토리의 존재 관리
+- name: "U-32 | 홈 디렉토리가 없는 계정 조회"
   ansible.builtin.shell: |
     set -o pipefail
     while IFS=: read -r acct home; do
-      if [ ! -d "$home" ]; then
-        echo "MISSING:${acct}:${home}"
-        continue
-      fi
-      owner=$(stat -c '%U' "$home")
-      perm=$(stat -c '%a' "$home")
-      [ "$owner" != "$acct" ] && echo "OWNER_MISMATCH:${acct}:${home}:owner=${owner}"
-      if [ $(( 0${perm} & 0022 )) -ne 0 ]; then
-        echo "GROUP_OR_OTHER_WRITABLE:${acct}:${home}:perm=${perm}"
-      fi
-    done < <(awk -F: '$3>=1000 && $7 !~ /nologin|false/ {print $1":"$6}' /etc/passwd)
+      [ -d "$home" ] || echo "${acct}:${home:-(미지정)}"
+    done < <(awk -F: '$7 !~ /(nologin|false|sync|shutdown|halt)$/ {print $1":"$6}' /etc/passwd)
   args:
     executable: /bin/bash
   register: u32_raw
@@ -463,14 +533,14 @@
 - name: "U-32 | 판정 기록"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-32', 'item': '홈 디렉터리 관리',
+      'id': 'U-32', 'item': '홈 디렉토리로 지정한 디렉토리의 존재 관리',
       'status': 'PASS' if (u32_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '위반 사항: ' ~ ((u32_raw.stdout_lines | default([])) | join('; ') if u32_raw.stdout | default('') | length > 0 else '없음')
+      'detail': '홈 디렉토리가 존재하지 않는 로그인 가능 계정(계정:홈): ' ~ ((u32_raw.stdout_lines | default([])) | join(', ') if u32_raw.stdout | default('') | length > 0 else '없음')
     }] }}"
 
 # U-67 | 로그 디렉터리 소유자 및 권한 설정
 - name: "U-67 | /var/log 내 로그파일 소유자·권한 위반 조회"
-  ansible.builtin.shell: "set -o pipefail && find /var/log -maxdepth 2 -type f \\( ! -user root -o -perm -0022 \\) 2>/dev/null | head -20"
+  ansible.builtin.shell: "set -o pipefail && find /var/log -maxdepth 2 -type f \\( ! -user root -o -perm /7133 \\) -printf '%p(%u,%m)\\n' 2>/dev/null | head -20"
   args:
     executable: /bin/bash
   register: u67_raw

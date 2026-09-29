@@ -21,6 +21,10 @@ IAM_ADMIN_WHITELIST = [
     "infra-jaehyeok",
     "infra-jiyoon",
 ]
+# 1.1 관리자 Role(AdministratorAccess 연결) 인가 목록 [2026-09-29 — 원문 재대조로 Role도 판정 대상에 포함]
+#   target-infra: 2026-09-29 인프라팀 회신 — mgmt 서버가 Assume해 점검·클러스터 관리에 쓰는 자동화용 Role
+#   (AdministratorAccess 부여 확인). 목록 밖 관리자 Role이 발견되면 FAIL.
+IAM_ADMIN_ROLE_WHITELIST = ["target-infra"]
 
 # 1.1 테스트/불필요 계정 네이밍 블랙리스트 [확정] — 정적 판정, 외부 확인 불필요
 TEST_ACCOUNT_NAME_PATTERNS = [r"^testuser$", r"^test\d+$"]
@@ -36,6 +40,10 @@ IAM_ACCOUNT_OWNER_MAP = {
     "infra-jaehyeok": "이재혁",
     "infra-jiyoon": "이지윤",
     "mgmt-automation-user": "시스템 공용 배포 계정",
+    # 2026-09-29 인프라팀 회신 — 백엔드 개발팀 발급 계정
+    "be-user1": "손하영",
+    "be-user2": "김재우",
+    "be-user3": "신지훈",
 }
 IAM_SHARED_ACCOUNT_EXCEPTIONS = ["mgmt-automation-user"]
 
@@ -73,6 +81,19 @@ EKS_ACCESS_WHITELIST = [
     "arn:aws:iam::596601390909:user/infra-mingyu",
     "arn:aws:iam::596601390909:user/infra-jaehyeok",
     "arn:aws:iam::596601390909:user/infra-jiyoon",
+    # 2026-09-28 인프라팀 회신 — 백엔드 개발팀 개발/운영 점검용 IAM 사용자
+    "arn:aws:iam::596601390909:user/be-user1",
+    "arn:aws:iam::596601390909:user/be-user2",
+    "arn:aws:iam::596601390909:user/be-user3",
+    # 2026-09-28 인프라팀 회신 — 백엔드 배포 작업 시 DB 인증 정보 조회용 목적별 Role(위 2026-09-18 안내의 DB Secret 접근용)
+    "arn:aws:iam::596601390909:role/db-admin-secret-reader",
+    # EKS 서비스 연결 역할(AWS 관리형) — 클러스터 운영용으로 AWS가 생성·관리
+    "arn:aws:iam::596601390909:role/aws-service-role/eks.amazonaws.com/AWSServiceRoleForAmazonEKS",
+    # 2026-09-28 인프라팀 회신(목적별 Role)
+    "arn:aws:iam::596601390909:role/eks-cluster-access",            # 인프라 운영 공통 조회용(MFA 필수, 클러스터 조회만·변경 불가)
+    "arn:aws:iam::596601390909:role/rabbitmq-redis-secret-reader",  # RabbitMQ/Redis Secret 조회 전용(담당: 지윤, 종원)
+    "arn:aws:iam::596601390909:role/target-infra",                  # EKS 전체 관리 권한(자동화 계정 — 개인 계정 대신 클러스터 접근에 사용)
+    "arn:aws:iam::596601390909:role/total-workload-publication",    # 워크로드 Secret 최소권한 배포용
 ]
 
 # 1.12 EKS 서비스 어카운트 토큰 자동 마운트 — 판정 범위
@@ -84,6 +105,8 @@ EKS_ACCESS_WHITELIST = [
 EKS_APP_NAMESPACES = ["backend", "frontend", "dev"]
 EKS_SA_API_ACCESS_EXCEPTIONS = [
     "backend/shared-pg",   # 2026-09-24 — CNPG DB 파드용 SA(인스턴스 매니저가 K8s API로 클러스터 상태를 관리)
+    "backend/moco-shared-mysql",     # 2026-09-28 인프라팀 회신 — MOCO MySQL 인스턴스 라이프사이클 관리·모니터링
+    "backend/shared-mysql-backup",   # 2026-09-28 인프라팀 회신 — 백업 실행 및 백업 상태 CRD/Secret 갱신
 ]
 
 # 2.1(인스턴스 서비스) — EKS 워커노드/NAT 인스턴스 IAM 역할에 허용된 관리형 정책
@@ -94,9 +117,11 @@ EKS_WORKER_NODE_REQUIRED_POLICIES = [
     "AmazonEC2ContainerRegistryReadOnly",
     "AmazonSSMManagedInstanceCore",
     "AmazonEKS_CNI_Policy",
+    "test-eks-node-ansible-s3",   # 2026-09-28 인프라팀 회신 — Ansible(aws_ssm 연결) 통신·산출물 임시 저장용 S3 정책
 ]
 NAT_INSTANCE_REQUIRED_POLICIES = [
     "AmazonSSMManagedInstanceCore",
+    "test-eks-node-ansible-s3",   # 2026-09-28 인프라팀 회신 — 위와 동일
 ]
 
 # 2.2(네트워크 서비스) — ALB(aws-load-balancer-controller IRSA) + VPC CNI
@@ -140,12 +165,18 @@ SERVICE_IAM_POLICY_MAP = {
 }
 SERVICE_IAM_KMS_CHECK_ENABLED = True
 SERVICE_IAM_KMS_ALLOWED_SERVICES = ["auth-service"]
-SERVICE_IAM_KMS_ALLOWED_ACTIONS = ["kms:Sign", "kms:GetPublicKey"]
+# 2026-09-28 인프라팀 회신 — auth-service는 KMS 비대칭 키(alias/auth-jwt-signing)로 JWT 서명·검증,
+# kms:Verify·kms:DescribeKey도 필수 호출(IRSA auth-service-irsa)
+SERVICE_IAM_KMS_ALLOWED_ACTIONS = ["kms:Sign", "kms:GetPublicKey", "kms:Verify", "kms:DescribeKey"]
 
 # 3.2 보안그룹 인/아웃바운드 규칙 baseline
 # [확정 — 2026-09-13 인프라팀 노션 회신] 인바운드는 VPC 내부 대역만 전체 허용, 외부
 # 인터넷(0.0.0.0/0) 인바운드는 전면 차단. 아웃바운드의 0.0.0.0/0은 정상(방향 구분 필수).
 SG_ALLOWED_INBOUND_CIDR = "10.0.0.0/16"
+# [2026-09-28 인프라팀 회신] 외부 인바운드가 있던 SG(sg-000532a79a28df296)는 ALB용 — internet-facing
+# ALB에 붙은 SG는 아래 포트의 외부(0.0.0.0/0, ::/0) 인바운드를 허용. SG ID는 인프라 재생성 때
+# 바뀌므로(9/23→9/24 확인) ID 대신 ALB 연결 여부로 자동 탐지(checks/network_checks.py).
+ALB_PUBLIC_INBOUND_PORTS = [80, 443]
 
 # 3.6 NAT 연결 "목적 확인된 리소스" 목록 [확정 — 2026-09-13 인프라팀 노션 회신]
 # source/dest check 비활성화 여부는 절대기준으로 자동판정(기존 로직 유지).
@@ -155,18 +186,9 @@ NAT_PURPOSE_CONFIRMED_RESOURCES = {
     "allowed_private_subnet_cidrs": ["10.0.16.0/20", "10.0.32.0/20"],
 }
 
-# 3.10⑤ ELB Idle Timeout 기준(초) [확정 — 2026-09-13 인프라팀 승인]
-# "현재 60초로 설정, 필요시 60초 이상 조정 가능" — 절대기준은 ">= 60초"(정확히 60초도
-# PASS). 나머지 7개 항목(리스너/SSL Policy/액세스로그/Deletion Protection/헬스체크/
-# 보안그룹/Cross-Zone)은 이미 확정, 항상 판정.
-ELB_IDLE_TIMEOUT_SECONDS = 60
-
-# 3.10⑥ 헬스체크 경로 예외 [2026-09-20 인프라팀 요청 — 트래킹표 7번]
-# "일괄 '/' 기준 적용에 따른 오탐" 소명 — ArgoCD(`/healthz`), Prometheus(`/api/health`)는
-# 자체 표준 헬스체크 엔드포인트를 쓰는 정상 구조라 예외 처리 요청. 대상 타겟그룹명을
-# 특정하지 않고 경로 값 자체를 허용목록으로 둔다(그 외 서비스가 이 경로를 쓰면 같이
-# PASS되지만, 이 두 값 외에는 여전히 '/'만 허용 — 오탐 범위를 요청받은 두 값으로 한정).
-ELB_HEALTHCHECK_PATH_EXCEPTIONS = ["/healthz", "/api/health"]
+# 3.10 — [2026-09-28] 원문(ELB 제어 정책 ELB.1~16) 기준으로 재작성하면서 원문에 없는 Idle Timeout
+# (ELB_IDLE_TIMEOUT_SECONDS)·헬스체크 경로 예외(ELB_HEALTHCHECK_PATH_EXCEPTIONS) 기준값은 삭제.
+# 판정 정책·기준은 checks/elb_checks.py 참고(기준값이 원문 고정값이라 설정 불필요).
 
 # 4.12 로그 보관 기간 최소 기준(일) [확정]
 LOG_RETENTION_MIN_DAYS = 365
@@ -184,8 +206,9 @@ EKS_KUBECONFIG_CONTEXT_OVERRIDE = {
 }
 
 # -----------------------------------------------------------------------------
-# 인증_인가(SVC-08) [2026-09-16 신규 코드화]
-#   SG 22번 차단·SSM 세션로그 연동은 자동판정, MFA 강제 여부는 클라우드 1.9(MFA 설정)와
-#   판정이 겹쳐서 중복 방지를 위해 True로 확정되기 전까지는 REVIEW로 보류한다.
+# 인증_인가(SVC-08) [2026-09-16 신규 코드화] — SG 22번 차단·SSM 세션로그 연동·SSM 접근 MFA 강제 자동판정
 # -----------------------------------------------------------------------------
-SVC08_MFA_CROSS_CHECK_DONE = False   # TODO: 1.9와 담당 정리 끝나면 True로 변경
+# [2026-09-28] SVC-08 MFA를 직접 판정(IAM 사용자별 MFA 없이 ssm:StartSession 허용 여부 시뮬레이션)하면서
+# 기존 SVC08_MFA_CROSS_CHECK_DONE 플래그 삭제. 아래는 운영 관리자가 아닌 자동화 계정 — 점검 스크립트(Ansible
+# aws_ssm 연결)가 SSM 세션을 여는 계정이라 MFA를 쓸 수 없어 판정에서 제외(상세에 표시).
+SVC08_MFA_EXCEPTIONS = ["mgmt-automation-user"]

@@ -1,8 +1,8 @@
 ---
-# site_check.yml — 인프라 점검 마스터 Playbook
+# 인프라 점검 Playbook
 
 - name: "서버 점검 — 계정·인증(A-1) / 파일권한(A-2) / 서비스관리(A-3)"
-  hosts: server_targets   # inventory 그룹명 (워커노드 + NAT 인스턴스)
+  hosts: server_targets
   gather_facts: true
   vars:
     check_results: []
@@ -13,11 +13,10 @@
     - network_service
     - log_patch_check
   tasks:
-    - name: "U-66 | 시스템 로깅 정책 점검 — mgmt 서버 AWS API 조회"
+    - name: "U-66 | 정책에 따른 시스템 로깅 설정 점검"
       ansible.builtin.include_role:
         name: log_patch_check
         tasks_from: u66_check
-      run_once: true
 
     - name: "결과 요약 출력"
       ansible.builtin.debug:
@@ -30,7 +29,7 @@
       delegate_to: localhost
 
 - name: "DBMS 점검"
-  hosts: localhost   # DB 클라이언트 커넥션은 controller(mgmt 서버)에서 네트워크로 접속
+  hosts: localhost
   gather_facts: true
   vars:
     check_results: []
@@ -52,7 +51,7 @@
         dest: "./results/dbms_{{ ansible_date_time.date }}.json"
 
 - name: "인증/인가 점검 (AUTHZ-XX, SVC-01) — K8s 기반"
-  hosts: localhost   # 백엔드 서비스 Ingress/NetworkPolicy는 mgmt 서버에서 K8s API로 조회
+  hosts: localhost
   gather_facts: true
   vars:
     check_results: []

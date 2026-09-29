@@ -24,11 +24,12 @@
     - network_service
     - log_patch_check
   tasks:
-    - name: "U-66 | 시스템 로깅 정책 점검 — mgmt 서버 AWS API 조회"
+    # [2026-09-28 버그 수정] 여기 run_once가 있으면 안의 set_fact가 첫 호스트 결과를 전체 호스트에 복사함
+    #   (9/23·9/24 서버 4대 결과 동일 원인) — 호스트마다 실행, AWS 조회만 내부에서 run_once.
+    - name: "U-66 | 정책에 따른 시스템 로깅 설정 점검"
       ansible.builtin.include_role:
         name: log_patch_check
         tasks_from: u66_check
-      run_once: true
 
     - name: "결과 요약 출력"
       ansible.builtin.debug:

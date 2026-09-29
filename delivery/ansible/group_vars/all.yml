@@ -1,17 +1,21 @@
 ---
-# 인프라 점검 기준값 (group_vars/all.yml)
+# 인프라 점검 기준값
 
-# =============================================================================
-# 서버(U-XX) 기준값
-# =============================================================================
+# 서버 기준값
 
-# U-02 : 패스워드 복잡도
+# U-02 : 비밀번호 관리정책 설정
 u02_pwquality:
   minlen: 8
   dcredit: -1
   ucredit: -1
   lcredit: -1
   ocredit: -1
+u02_pass_max_days: 90
+u02_pass_min_days: 1
+u02_remember_min: 4
+
+# U-03 : 계정 잠금 임계값 설정
+u03_deny_max: 10
 
 # U-07 : 불필요한 계정 제거
 u07_unnecessary_accounts:
@@ -23,40 +27,34 @@ u07_unnecessary_accounts:
   - news
   - sync
 u07_unused_login_days_threshold: 90
-u07_stale_check_exclude_accounts:   # SSM 접속용 필수 계정(SSM 에이전트가 자동 생성)
+u07_stale_check_exclude_accounts:
   - ssm-user
 
-# U-08 : root 그룹 권한 제한
+# U-08 : 관리자 그룹에 최소한의 계정 포함
 u08_root_group_admin_whitelist: ["root"]
 
-# U-12 : 세션 타임아웃
+# U-09 : 계정이 존재하지 않는 GID 금지
+u09_allowed_empty_groups: []
+
+# U-12 : 세션 종료 시간 설정
 u12_tmout_max_seconds: 600
 
-# U-13 : 패스워드 해시 알고리즘
-u13_required_encrypt_method: "SHA512"
+# U-13 : 안전한 비밀번호 암호화 알고리즘 사용
+u13_allowed_encrypt_methods: ["SHA256", "SHA512"]
 
 # U-16,18,19,20,21,22,27,29,37,67 : 주요 파일 권한 임계값
-u16_passwd_perm_max: "0644"      # /etc/passwd
-u18_shadow_perm_max: "0400"      # /etc/shadow
-u19_hosts_perm_max: "0644"       # /etc/hosts
-u20_xinetd_perm_max: "0600"      # /etc/xinetd.conf, /etc/xinetd.d/*
-u21_syslog_perm_max: "0640"      # /etc/rsyslog.conf
-u22_services_perm_max: "0644"    # /etc/services
-u27_hosts_equiv_perm_max: "0600" # /etc/hosts.equiv, ~/.rhosts
-u29_hosts_lpd_perm_max: "0600"   # /etc/hosts.lpd
-u37_crontab_perm_max: "0640"     # /etc/crontab, /etc/cron.d/*
-u67_log_perm_max: "0644"         # /var/log/* 로그 파일
+u16_passwd_perm_max: "0644"
+u18_shadow_perm_max: "0400"
+u19_hosts_perm_max: "0644"
+u20_xinetd_perm_max: "0600"
+u21_syslog_perm_max: "0640"
+u22_services_perm_max: "0644"
+u27_hosts_equiv_perm_max: "0600"
+u29_hosts_lpd_perm_max: "0600"
+u37_crontab_perm_max: "0640"
+u67_log_perm_max: "0644"
 
-# U-17 : 링크 파일 보호
-u17_protected_files:
-  - /etc/passwd
-  - /etc/shadow
-  - /etc/group
-  - /etc/hosts
-  - /etc/services
-  - /etc/rsyslog.conf
-
-# U-23 : SUID/SGID 설정 점검
+# U-23 : SUID, SGID, Sticky bit 설정 파일 점검
 u23_allowed_suid_sgid:
   - /usr/bin/su
   - /usr/bin/sudo
@@ -73,12 +71,14 @@ u23_allowed_suid_sgid:
   - /usr/bin/chage
   - /usr/bin/write
   - /usr/bin/screen
-u15_unowned_exclude_dirs:   # U-15 제외 경로(컨테이너 이미지 레이어)
+  - /usr/sbin/unix_chkpwd
+  - /usr/libexec/utempter/utempter
+u15_unowned_exclude_dirs:
   - /var/lib/containerd
-u23_suid_exclude_dirs:      # U-23 제외 경로(컨테이너 이미지 레이어)
+u23_suid_exclude_dirs:
   - /var/lib/containerd
 
-# U-24 : 사용자 환경 파일 보호
+# U-24 : 사용자, 시스템 환경변수 파일 소유자 및 권한 설정
 u24_user_env_files:
   - .profile
   - .bashrc
@@ -102,168 +102,70 @@ u25_world_writable_exclude_dirs:
   - /var/lib/kubelet/pods
   - /var/lib/containerd
 
-# U-26 : 중요 디바이스 파일 보호
-u26_dev_baseline_snapshot:
-  - "/dev/autofs"
-  - "/dev/btrfs-control"
-  - "/dev/console"
-  - "/dev/cpu_dma_latency"
-  - "/dev/cuse"
-  - "/dev/dma_heap/system"
-  - "/dev/full"
-  - "/dev/fuse"
-  - "/dev/gpiochip0"
-  - "/dev/input/event0"
-  - "/dev/input/event1"
-  - "/dev/kmsg"
-  - "/dev/loop-control"
-  - "/dev/mapper/control"
-  - "/dev/net/tun"
-  - "/dev/ng0n1"
-  - "/dev/ng1n1"
-  - "/dev/null"
-  - "/dev/nvme0"
-  - "/dev/nvme1"
-  - "/dev/ppp"
-  - "/dev/ptmx"
-  - "/dev/pts/0"
-  - "/dev/pts/1"
-  - "/dev/pts/ptmx"
-  - "/dev/random"
-  - "/dev/rtc0"
-  - "/dev/snapshot"
-  - "/dev/tty"
-  - "/dev/tty0"
-  - "/dev/tty1"
-  - "/dev/tty10"
-  - "/dev/tty11"
-  - "/dev/tty12"
-  - "/dev/tty13"
-  - "/dev/tty14"
-  - "/dev/tty15"
-  - "/dev/tty16"
-  - "/dev/tty17"
-  - "/dev/tty18"
-  - "/dev/tty19"
-  - "/dev/tty2"
-  - "/dev/tty20"
-  - "/dev/tty21"
-  - "/dev/tty22"
-  - "/dev/tty23"
-  - "/dev/tty24"
-  - "/dev/tty25"
-  - "/dev/tty26"
-  - "/dev/tty27"
-  - "/dev/tty28"
-  - "/dev/tty29"
-  - "/dev/tty3"
-  - "/dev/tty30"
-  - "/dev/tty31"
-  - "/dev/tty32"
-  - "/dev/tty33"
-  - "/dev/tty34"
-  - "/dev/tty35"
-  - "/dev/tty36"
-  - "/dev/tty37"
-  - "/dev/tty38"
-  - "/dev/tty39"
-  - "/dev/tty4"
-  - "/dev/tty40"
-  - "/dev/tty41"
-  - "/dev/tty42"
-  - "/dev/tty43"
-  - "/dev/tty44"
-  - "/dev/tty45"
-  - "/dev/tty46"
-  - "/dev/tty47"
-  - "/dev/tty48"
-  - "/dev/tty49"
-  - "/dev/tty5"
-  - "/dev/tty50"
-  - "/dev/tty51"
-  - "/dev/tty52"
-  - "/dev/tty53"
-  - "/dev/tty54"
-  - "/dev/tty55"
-  - "/dev/tty56"
-  - "/dev/tty57"
-  - "/dev/tty58"
-  - "/dev/tty59"
-  - "/dev/tty6"
-  - "/dev/tty60"
-  - "/dev/tty61"
-  - "/dev/tty62"
-  - "/dev/tty63"
-  - "/dev/tty7"
-  - "/dev/tty8"
-  - "/dev/tty9"
-  - "/dev/ttyS0"
-  - "/dev/ttyS1"
-  - "/dev/ttyS2"
-  - "/dev/ttyS3"
-  - "/dev/uhid"
-  - "/dev/uinput"
-  - "/dev/urandom"
-  - "/dev/userfaultfd"
-  - "/dev/vcs"
-  - "/dev/vcs1"
-  - "/dev/vcs2"
-  - "/dev/vcs3"
-  - "/dev/vcs4"
-  - "/dev/vcs5"
-  - "/dev/vcs6"
-  - "/dev/vcsa"
-  - "/dev/vcsa1"
-  - "/dev/vcsa2"
-  - "/dev/vcsa3"
-  - "/dev/vcsa4"
-  - "/dev/vcsa5"
-  - "/dev/vcsa6"
-  - "/dev/vcsu"
-  - "/dev/vcsu1"
-  - "/dev/vcsu2"
-  - "/dev/vcsu3"
-  - "/dev/vcsu4"
-  - "/dev/vcsu5"
-  - "/dev/vcsu6"
-  - "/dev/vfio/vfio"
-  - "/dev/vga_arbiter"
-  - "/dev/vhost-net"
-  - "/dev/vhost-vsock"
-  - "/dev/vmclock0"
-  - "/dev/zero"
+# U-26 : /dev에 존재하지 않는 device 파일 점검
 u26_dev_exclude_dirs:
   - mqueue
   - shm
 
-# U-28 : IP 기반 접근제어 (SG 22번 인바운드 부재 기반 자동판정, 별도 변수 불필요)
+# U-28 : 접속 IP 및 포트 제한
 
-# U-30 : UMASK 설정
+# U-30 : UMASK 설정 관리
 u30_umask_min: "022"
 
-# U-31 : 숨김 디렉터리 점검
-u31_os_baseline_hidden_entries:
-  - .ssh
-  - .cache
-  - .config
-  - .local
-  - .bash_history
-  - .aws
-  - .kube
-  - .ansible
-  - .gnupg
-
-# U-33 : 불필요한 파일 제거
-u33_business_file_dirs:
-  - /opt
-  - /srv
-  - /var/www
-  - /app
-u33_business_file_exclude_dirs:
-  - /opt/aws
-  - /opt/cni
-  - /opt/containerd
-  - /opt/amazon
+# U-33 : 숨겨진 파일 및 디렉토리 검색 및 제거
+u33_hidden_exclude_dirs:
+  - /proc
+  - /sys
+  - /run
+  - /var/lib/containerd
+  - /var/lib/kubelet
+u33_hidden_allowed_paths:
+  - "/root/.bash*"
+  - "/root/.profile"
+  - "/root/.cshrc"
+  - "/root/.tcshrc"
+  - "/root/.ssh"
+  - "/root/.cache"
+  - "/root/.config"
+  - "/root/.local"
+  - "/root/.aws"
+  - "/root/.kube"
+  - "/root/.ansible"
+  - "/root/.gnupg"
+  - "/root/.viminfo"
+  - "/root/.lesshst"
+  - "/home/*/.bash*"
+  - "/home/*/.profile"
+  - "/home/*/.ssh"
+  - "/home/*/.cache"
+  - "/home/*/.config"
+  - "/home/*/.local"
+  - "/home/*/.aws"
+  - "/home/*/.kube"
+  - "/home/*/.ansible"
+  - "/home/*/.gnupg"
+  - "/home/*/.viminfo"
+  - "/home/*/.lesshst"
+  - "/root/.python_history"
+  - "/root/.wget-hsts"
+  - "/root/.rnd"
+  - "/root/.pki"
+  - "/home/*/.python_history"
+  - "/home/*/.wget-hsts"
+  - "/home/*/.rnd"
+  - "/home/*/.pki"
+  - "/etc/skel/.*"
+  - "/etc/.pwd.lock"
+  - "/etc/.updated"
+  - "/var/.updated"
+  - "/var/lib/rpm/.rpm.lock"
+  - "/usr/lib/sysimage/rpm/.rpm.lock"
+  - "/tmp/.X11-unix"
+  - "/tmp/.ICE-unix"
+  - "/tmp/.font-unix"
+  - "/tmp/.XIM-unix"
+  - "/tmp/.Test-unix"
+  - "/var/log/journal/*/.#*journal*"
 
 # U-40 : NFS 접근 통제
 u40_nfs_allowed_hosts: null
@@ -284,7 +186,7 @@ u51_dns_dynamic_update_allowed: null
 u56_ftp_allowed_hosts: null
 u61_snmp_allowed_hosts: null
 
-# U-60 : SNMP Community String 복잡성
+# U-60 : SNMP Community String 복잡성 설정
 u60_snmp_community_blacklist:
   - public
   - private
@@ -294,25 +196,12 @@ u64_eks_optimized_ami_ssm_param: "/aws/service/eks/optimized-ami/1.36/amazon-lin
 u64_nat_latest_ami_ssm_param: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
 u64_dnf_patch_max_age_days: 30
 
-# U-66 : 정책에 따른 시스템 로깅 설정
-u66_missing_log_categories:
-  - "sudo 로그"
-  - "DB 감사로그"
-u66_log_group_name: null
-u66_log_retention_min_days: 365
-
 # U-65 : NTP 및 시각 동기화 설정
 u65_ntp_allowed_servers: ["169.254.169.123"]
 
-# =============================================================================
-# DBMS(D-XX) 기준값
-# =============================================================================
+# DBMS 기준값
 
-# D-26 : 데이터베이스 감사 기록 보관기간
-d26_audit_not_implemented: true
-d26_audit_log_group_name: null
-
-# 서비스별 DB 계정/DB명/NetworkPolicy 라벨 매핑 (D-02/04/06/10 공통 참조)
+# D-02/04/06/10 : 서비스별 DB 계정 매핑
 dbms_service_accounts:
   - service: user-service
     engine: mysql
@@ -347,7 +236,7 @@ dbms_service_accounts:
     database: scm_db
     account: scm_user
 
-# D-02 : 불필요 계정 제거
+# D-02 : 데이터베이스의 불필요 계정을 제거하거나, 잠금설정 후 사용
 d02_unnecessary_account_whitelist:
   - user_user
   - auth_user
@@ -357,15 +246,15 @@ d02_unnecessary_account_whitelist:
   - product_user
   - wms_user
   - scm_user
-  - ai_user        # ai-service 계정(점검 8개 서비스 범위 밖이지만 같은 PostgreSQL 클러스터의 정상 계정)
+  - ai_user
 
-# D-02/04/06/21 : 운영 필수 계정(오퍼레이터 내부 계정 / DBA 관리 계정)
+# D-02/04/06/21 : 운영 필수 계정
 dbms_operator_accounts:
   mysql: [moco-admin, moco-agent, moco-repl, moco-clone-donor, moco-exporter, moco-backup, moco-readonly, moco-writable]
   postgresql: [streaming_replica]
 dbms_dba_accounts: [dba_admin]
 
-# D-03 : dba_admin 비밀번호 자동 교체 이력(DB 만료 설정과 함께 인정)
+# D-03 : 비밀번호 사용 기간 및 복잡도를 기관의 정책에 맞도록 설정
 d03_rotation:
   namespace: backend
   annotation: "dba-admin/last-rotated"
@@ -373,8 +262,7 @@ d03_rotation:
     mysql: "shared-mysql-dba-admin"
     postgresql: "shared-pg-dba-admin-credentials"
 
-# D-03 : 비밀번호 사용기간·복잡도 (서비스 계정 제외, 전용 유저 계정에만 적용)
-# [2026-09-23] 전용 유저 계정 dba_admin 생성 확인(인프라팀)
+# D-03 : 비밀번호 사용 기간 및 복잡도를 기관의 정책에 맞도록 설정
 d03_password_max_days: 90
 d03_password_min_length: 12
 d03_password_complexity_min_classes: 3
@@ -382,34 +270,47 @@ d03_user_accounts:
   mysql: ["dba_admin"]
   postgresql: ["dba_admin"]
 
-# D-04 : 관리자 권한 최소 인원
+# D-04 : 데이터베이스 관리자 권한을 꼭 필요한 계정 및 그룹에 대해서만 허용
 d04_admin_account_whitelist: []
 
-# D-05 : 비밀번호 재사용 제한
+# D-05 : 비밀번호 재사용에 대한 제약 설정
 d05_applicable: true
 d05_password_reuse_limit: 3
 
-# D-17 : Audit Table 접근 제한 (PostgreSQL 관리자 화이트리스트)
+# D-17 : Audit Table은 데이터베이스 관리자 계정으로 접근하도록 제한
 d17_admin_account_whitelist:
   - postgres
 
-# D-10 : 원격 DB 서버 접속 제한 (NetworkPolicy 라벨 키)
+# D-10 : 원격에서 DB 서버로의 접속 제한
 d10_np_label_key: "app"
 
-# D-20 : 인가되지 않은 Object Owner 제한
+# D-20 : 인가되지 않은 Object Owner의 제한
 d20_admin_owner_whitelist:
   - postgres
   - product_user
   - wms_user
   - scm_user
-  - oms_user   # 2026-09-24 추가 — oms_db(9/23 활성화)도 같은 규칙
+  - oms_user
 
 # D-21 : 인가되지 않은 GRANT OPTION 사용 제한
 d21_grant_option_admin_whitelist:
   - root
   - postgres
 
-# DB 접속 정보
+# D-25 : 주기적 보안 패치 및 벤더 권고 사항 적용
+d25_db_latest_versions_as_of: "2026-09-29"
+d25_db_latest_versions:
+  mysql:
+    "8.4": "8.4.12"
+    "9.7": "9.7.3"
+  postgresql:
+    "14": "14.24"
+    "15": "15.19"
+    "16": "16.15"
+    "17": "17.11"
+    "18": "18.6"
+
+# DBMS 접속 정보
 dbms_connections:
   - service: user_db
     engine: mysql
@@ -442,15 +343,13 @@ dbms_connections:
     namespace: backend
     pod_label_selector: "cnpg.io/cluster=shared-pg"
     database: "scm_db"
-  - service: oms_db   # [2026-09-23] 시크릿명 확정(인프라팀), 다른 PostgreSQL DB와 동일 규칙
+  - service: oms_db
     engine: postgresql
     namespace: backend
     pod_label_selector: "cnpg.io/cluster=shared-pg"
     database: "oms_db"
 
-# DBMS 관리자(admin) 접속 정보 — D-01/02/04/06/08/11/18/20/21 전용(그 외 항목은 dbms_connections 사용)
-# MySQL은 DBA 관리 계정 dba_admin(Secret shared-mysql-dba-admin, 90일 자동 교체) 사용,
-# PostgreSQL은 CNPG 파드 내부 로컬 접속이라 별도 Secret 불필요
+# D-01/02/04/06/08/11/18/20/21 : DBMS 관리자 접속 정보
 dbms_admin_connections:
   mysql:
     namespace: backend
@@ -458,13 +357,20 @@ dbms_admin_connections:
     secret_username: "dba_admin"
     secret_password_key: "password"
 
-# =============================================================================
-# 인증_인가(AUTHZ-XX, SVC-01) 기준값
-# =============================================================================
+# 인증_인가 기준값
 authz_backend_namespace: "backend"
 authz_internal_path_prefix: "/internal"
 
 # SVC-01 : 서비스 간 NetworkPolicy 화이트리스트
+svc01_target_services:
+  - auth-service
+  - user-service
+  - order-service
+  - payment-service
+  - product-service
+  - oms-service
+  - wms-service
+  - scm-service
 svc01_allowed_service_calls:
   - { caller: "order-service",   callee: "oms-service" }
   - { caller: "product-service", callee: "order-service" }
@@ -482,10 +388,7 @@ svc01_allowed_service_calls:
   - { caller: "user-service",    callee: "auth-service" }
 
 # AUTHZ-09 : WMS→OMS 반품검수 RabbitMQ 발행/구독 권한
-# [2026-09-23] 계정 분리 완료 확인(total-wms/total-oms 발급, 임시 계정으로 수동 검증
-# 완료 — OMS topic 권한 미설정으로 FAIL, 이행점검 별도 추적). Management API 상시
-# 접근 경로는 여전히 구조적으로 불가라 url/secret은 null 유지 → SKIP 분기로 라우팅.
-authz09_shared_account_blocks_check: false   # 계정 분리 완료 확인 — false로 전환
+authz09_shared_account_blocks_check: false
 authz09_rabbitmq_management_url: null
 authz09_rabbitmq_readonly_user_secret: null
 authz09_rabbitmq_vhost: "total-prod"

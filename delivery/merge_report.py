@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""server_dbms_result.xlsx + cloud_result.xlsx -> infra_check_{YYYYMMDD}_{회차}.xlsx
-
-실행 예시:
-    python3 merge_report.py --round "1차" --date 20260914
-
-시트 5개(요약/서버/DBMS/클라우드/인증_인가)로 구성한 최종 결과물을 만든다.
-이 파일이 SHA-256 해시와 함께 보안팀에 전달되는 결과물이다.
-"""
+"""서버·DBMS·클라우드 결과 통합 리포트 생성."""
 import argparse
 from datetime import datetime
 from pathlib import Path
@@ -101,7 +94,6 @@ def write_summary_sheet(wb, round_, checked_at, all_rows, category_rows):
             ws.cell(row=ws.max_row, column=1).fill = STATUS_FILL[label]
             ws.cell(row=ws.max_row, column=2).fill = STATUS_FILL[label]
 
-    # 파트(서버/DBMS/클라우드/인증_인가)별 PASS/FAIL/N/A/SKIP/REVIEW 현황
     ws.append([])
     ws.append(["파트별 현황"])
     ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
@@ -137,8 +129,6 @@ def main():
     server_rows = read_sheet_rows(Path(args.server_dbms), "서버")
     dbms_rows = read_sheet_rows(Path(args.server_dbms), "DBMS")
     cloud_rows = read_sheet_rows(Path(args.cloud), "클라우드")
-    # 인증_인가는 K8s 기반(AUTHZ-08/09, SVC-01 — server_dbms_result.xlsx)과
-    # AWS 기반(SVC-02/AUTHN-14/SVC-08 — cloud_result.xlsx) 두 소스를 합쳐 한 시트로 만든다.
     auth_rows = read_sheet_rows(Path(args.server_dbms), "인증_인가") + read_sheet_rows(Path(args.cloud), "인증_인가")
     all_rows = server_rows + dbms_rows + cloud_rows + auth_rows
     category_rows = [

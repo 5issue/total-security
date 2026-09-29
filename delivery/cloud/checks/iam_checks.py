@@ -11,37 +11,76 @@ IDENTITY_TAG_KEYS = {"name", "email", "dept", "department", "부서", "이름", 
 ADMIN_POLICY_ARN = "arn:aws:iam::aws:policy/AdministratorAccess"
 
 
+def _has_admin_policy(list_fn, **name_kw):
+    """AdministratorAccess 연결 여부. 반환: True/False, 조회 실패 시 None."""
+    res, err = safe_call(list_fn, **name_kw)
+    return None if err else any(p["PolicyArn"] == ADMIN_POLICY_ARN for p in res["AttachedPolicies"])
+
+
 def check_1_1_user_account_management(iam):
     users, err = safe_call(iam.list_users)
     if err:
         return [make_result("1.1", "사용자 계정 관리", "SKIP", f"IAM 사용자 목록 조회 실패: {err}")]
-    ungrouped_admins = []
+    errors = []
+    groups, gerr = safe_call(iam.list_groups)
+    if gerr:
+        errors.append(f"그룹 목록({gerr})")
+    admin_groups = set()
+    for g in ([] if gerr else groups["Groups"]):
+        has = _has_admin_policy(iam.list_attached_group_policies, GroupName=g["GroupName"])
+        if has is None:
+            errors.append(f"그룹 {g['GroupName']} 정책")
+        elif has:
+            admin_groups.add(g["GroupName"])
+
+    admin_users = {}   # 사용자 → 권한 경로(직접 / 그룹명)
     for u in users["Users"]:
         name = u["UserName"]
-        groups, gerr = safe_call(iam.list_groups_for_user, UserName=name)
-        if gerr or groups["Groups"]:
-            continue  # 그룹 소속이면 그룹을 통한 권한관리로 간주(정상)
-        policies, perr = safe_call(iam.list_attached_user_policies, UserName=name)
-        if not perr and any(p["PolicyArn"] == ADMIN_POLICY_ARN for p in policies["AttachedPolicies"]):
-            ungrouped_admins.append(name)
+        has = _has_admin_policy(iam.list_attached_user_policies, UserName=name)
+        if has is None:
+            errors.append(f"사용자 {name} 정책")
+        via = ["직접"] if has else []
+        ugroups, ugerr = safe_call(iam.list_groups_for_user, UserName=name)
+        if ugerr:
+            errors.append(f"사용자 {name} 그룹")
+        via += [f"그룹 {g['GroupName']}" for g in ([] if ugerr else ugroups["Groups"]) if g["GroupName"] in admin_groups]
+        if via:
+            admin_users[name] = via
 
-    # ② 테스트/불필요 계정 네이밍 블랙리스트 — 정적 판정, 화이트리스트 여부와 무관하게 항상 확인
+    paginator = iam.get_paginator("list_roles")
+    roles, rerr = safe_call(lambda: [r for page in paginator.paginate() for r in page["Roles"]])
+    if rerr:
+        errors.append(f"Role 목록({rerr})")
+    admin_roles = []
+    for r in ([] if rerr else roles):
+        if r.get("Path", "").startswith("/aws-service-role/"):
+            continue   # AWS가 생성·관리하는 서비스 연결 역할
+        has = _has_admin_policy(iam.list_attached_role_policies, RoleName=r["RoleName"])
+        if has is None:
+            errors.append(f"Role {r['RoleName']} 정책")
+        elif has:
+            admin_roles.append(r["RoleName"])
+
     all_names = [u["UserName"] for u in users["Users"]]
     blacklisted = [n for n in all_names if any(re.match(p, n) for p in config.TEST_ACCOUNT_NAME_PATTERNS)]
+    admins_desc = ("관리자 권한(AdministratorAccess) 보유 — 사용자: "
+                   + (", ".join(f"{n}({'/'.join(v)})" for n, v in admin_users.items()) or "없음")
+                   + " / Role: " + (", ".join(admin_roles) or "없음"))
 
-    if blacklisted:
-        status = "FAIL"
-        detail = f"테스트/불필요 계정 존재: {', '.join(blacklisted)}"
-    elif config.IAM_ADMIN_WHITELIST is None:
-        status = "SKIP"
-        detail = ("업무상 인가된 관리자 화이트리스트(config.IAM_ADMIN_WHITELIST) 미확정 — "
-                   f"그룹 미소속+AdministratorAccess 직접보유 계정(참고용): "
-                   f"{', '.join(ungrouped_admins) if ungrouped_admins else '없음'}")
+    if config.IAM_ADMIN_WHITELIST is None:
+        status = "FAIL" if blacklisted else "SKIP"
+        detail = ((f"테스트/불필요 계정 존재: {', '.join(blacklisted)} / " if blacklisted else "")
+                  + "인가된 관리자 목록(config.IAM_ADMIN_WHITELIST) 미확정 — " + admins_desc)
     else:
-        unauthorized = [n for n in ungrouped_admins if n not in config.IAM_ADMIN_WHITELIST]
-        status = "PASS" if not unauthorized else "FAIL"
-        detail = "화이트리스트 외 그룹 미소속 AdministratorAccess 직접보유 계정: " + \
-                  (", ".join(unauthorized) if unauthorized else "없음")
+        bad_users = [n for n in admin_users if n not in config.IAM_ADMIN_WHITELIST]
+        bad_roles = [r for r in admin_roles if r not in config.IAM_ADMIN_ROLE_WHITELIST]
+        status = "FAIL" if (blacklisted or bad_users or bad_roles) else ("REVIEW" if errors else "PASS")
+        detail = ("테스트/불필요 계정: " + (", ".join(blacklisted) or "없음")
+                  + " / 인가 목록 외 관리자 사용자: " + (", ".join(bad_users) or "없음")
+                  + " / 인가 목록 외 관리자 Role: " + (", ".join(bad_roles) or "없음")
+                  + " | " + admins_desc)
+    if errors:
+        detail += " / 조회 실패: " + ", ".join(errors[:5]) + (f" 외 {len(errors) - 5}건" if len(errors) > 5 else "")
     return [make_result("1.1", "사용자 계정 관리", status, detail)]
 
 
@@ -52,7 +91,6 @@ def check_1_2_iam_single_account(iam):
         return [make_result("1.2", "IAM 사용자 계정 단일화 관리", "SKIP",
                              "계정-담당자 매핑표(config.IAM_ACCOUNT_OWNER_MAP) 미확정 — "
                              f"전체 IAM 사용자(참고용): {', '.join(names) if names else '없음'}")]
-    # 1인 다중 계정 보유 검사(공용 배포 계정 등 명시적 예외는 제외)
     exceptions = set(config.IAM_SHARED_ACCOUNT_EXCEPTIONS or [])
     owner_counts = {}
     for user_name, owner in config.IAM_ACCOUNT_OWNER_MAP.items():
@@ -61,7 +99,6 @@ def check_1_2_iam_single_account(iam):
         owner_counts[owner] = owner_counts.get(owner, 0) + 1
     dup_owners = {owner: cnt for owner, cnt in owner_counts.items() if cnt > 1}
 
-    # 매핑표에 없는 신규/미상 IAM 사용자 검사
     users, err = safe_call(iam.list_users)
     unmapped = []
     if not err:
@@ -114,7 +151,6 @@ def _ssh_inbound_open(perm):
 
 
 def check_1_5_keypair_access(ec2):
-    # Key Pair 미설정 + SSH(22) 인바운드 차단이면 SSM 전용 접속(패스워드 접근 경로 없음)으로 양호
     reservations, err = safe_call(ec2.describe_instances)
     if err:
         return [make_result("1.5", "Key Pair 접근 관리", "SKIP", f"EC2 인스턴스 조회 실패: {err}")]
@@ -143,7 +179,6 @@ def check_1_5_keypair_access(ec2):
 
 
 def check_1_6_keypair_storage(ec2):
-    # EC2 Key Pair 자체 미사용(SSM 접속) — 보관 위치 점검 대상 자체가 없는 게 정상(N/A)
     reservations, err = safe_call(ec2.describe_instances)
     if err:
         return [make_result("1.6", "Key Pair 보관 관리", "SKIP", f"EC2 인스턴스 조회 실패: {err}")]
@@ -158,7 +193,7 @@ def check_1_6_keypair_storage(ec2):
     return [make_result("1.6", "Key Pair 보관 관리", status, detail)]
 
 
-def check_1_7_admin_console_policy(iam):
+def _root_credential_row(iam):
     for _ in range(5):
         gen, gerr = safe_call(iam.generate_credential_report)
         if not gerr and gen.get("State") == "COMPLETE":
@@ -166,32 +201,49 @@ def check_1_7_admin_console_policy(iam):
         time.sleep(1)
     report, rerr = safe_call(iam.get_credential_report)
     if rerr:
-        return [make_result("1.7", "Admin Console 관리자 정책 관리", "SKIP", f"Credential Report 조회 실패: {rerr}")]
+        return None, f"Credential Report 조회 실패: {rerr}"
     reader = csv.DictReader(io.StringIO(report["Content"].decode("utf-8")))
     root_row = next((row for row in reader if row["user"] == "<root_account>"), None)
-    if not root_row:
-        return [make_result("1.7", "Admin Console 관리자 정책 관리", "SKIP", "Credential Report에 root 계정 행 없음")]
-    key_active = root_row.get("access_key_1_active") == "true" or root_row.get("access_key_2_active") == "true"
+    return root_row, (None if root_row else "Credential Report에 root 계정 행 없음")
+
+
+def _root_key_active(root_row):
+    return root_row.get("access_key_1_active") == "true" or root_row.get("access_key_2_active") == "true"
+
+
+def check_1_7_admin_console_policy(iam):
+    root_row, rerr = _root_credential_row(iam)
+    if rerr:
+        return [make_result("1.7", "Admin Console 관리자 정책 관리", "SKIP", rerr)]
+    key_active = _root_key_active(root_row)
     status = "FAIL" if key_active else "PASS"
     detail = f"root Access Key 존재={key_active}, password_last_used={root_row.get('password_last_used')}"
     return [make_result("1.7", "Admin Console 관리자 정책 관리", status, detail)]
 
 
-def check_1_8_access_key_lifecycle(configservice):
+def check_1_8_access_key_lifecycle(iam, configservice):
+    root_row, rerr = _root_credential_row(iam)
+    root_note = ("root 계정 Access Key 확인 실패: " + rerr) if rerr else \
+        ("root 계정 Access Key 존재" if _root_key_active(root_row) else "root 계정 Access Key 없음")
+    root_bad = bool(root_row) and _root_key_active(root_row)
     result, err = safe_call(
         configservice.describe_compliance_by_config_rule,
         ConfigRuleNames=[config.ACCESS_KEY_ROTATION_CONFIG_RULE],
     )
-    if err:
-        return [make_result("1.8", "Admin Console 계정 Access Key 활성화 및 사용주기 관리", "SKIP",
-                             f"AWS Config Rule({config.ACCESS_KEY_ROTATION_CONFIG_RULE}) 조회 실패: {err}")]
-    rules = result.get("ComplianceByConfigRules", [])
-    if not rules:
-        return [make_result("1.8", "Admin Console 계정 Access Key 활성화 및 사용주기 관리", "SKIP",
-                             f"Config Rule({config.ACCESS_KEY_ROTATION_CONFIG_RULE}) 미존재 — 배포 여부 확인 필요")]
+    rules = [] if err else result.get("ComplianceByConfigRules", [])
+    if err or not rules:
+        key_note = (f"AWS Config Rule({config.ACCESS_KEY_ROTATION_CONFIG_RULE}) 조회 실패: {err}" if err
+                    else f"Config Rule({config.ACCESS_KEY_ROTATION_CONFIG_RULE}) 미존재 — 배포 여부 확인 필요")
+        return [make_result("1.8", "Admin Console 계정 Access Key 활성화 및 사용주기 관리",
+                             "FAIL" if root_bad else "SKIP", f"{root_note} / IAM 사용자 키: {key_note}")]
     compliance_type = rules[0]["Compliance"]["ComplianceType"]
-    status = "PASS" if compliance_type == "COMPLIANT" else "FAIL"
-    detail = f"Config Rule({config.ACCESS_KEY_ROTATION_CONFIG_RULE}) 컴플라이언스: {compliance_type}"
+    if root_bad or compliance_type != "COMPLIANT":
+        status = "FAIL"
+    elif rerr:
+        status = "REVIEW"
+    else:
+        status = "PASS"
+    detail = f"{root_note} / IAM 사용자 키 60일 주기 Config Rule({config.ACCESS_KEY_ROTATION_CONFIG_RULE}): {compliance_type}"
     return [make_result("1.8", "Admin Console 계정 Access Key 활성화 및 사용주기 관리", status, detail)]
 
 
@@ -201,7 +253,6 @@ def check_1_9_mfa(iam):
         return [make_result("1.9", "MFA(Multi-Factor Authentication) 설정", "SKIP", f"IAM 사용자 목록 조회 실패: {err}")]
     no_mfa = []
     for u in users["Users"]:
-        # 콘솔 로그인 프로필 없는 사용자(Access Key 전용)는 MFA 대상에서 제외
         _, lp_err = safe_call(iam.get_login_profile, UserName=u["UserName"])
         if lp_err:
             continue
@@ -231,8 +282,6 @@ def check_1_10_password_policy(iam):
     return [make_result("1.10", "AWS 계정 패스워드 정책 관리", status, str(p))]
 
 
-# 2.3(기타 서비스 KMS/S3/SecretManager)은 2.1/2.2와 함께 eks_checks.py에 구현됨(K8s API 필요)
-
 
 def run_all(iam, ec2, configservice):
     results = []
@@ -243,7 +292,7 @@ def run_all(iam, ec2, configservice):
     results += check_1_5_keypair_access(ec2)
     results += check_1_6_keypair_storage(ec2)
     results += check_1_7_admin_console_policy(iam)
-    results += check_1_8_access_key_lifecycle(configservice)
+    results += check_1_8_access_key_lifecycle(iam, configservice)
     results += check_1_9_mfa(iam)
     results += check_1_10_password_policy(iam)
     return results

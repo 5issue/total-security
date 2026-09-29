@@ -1,35 +1,72 @@
 ---
 # =============================================================================
 # u66_check.yml — U-66(정책에 따른 시스템 로깅 설정) 점검
-#   [2026-09-13 인프라팀 노션 회신] 실제 구현은 ALB 액세스로그용 S3 버킷 하나뿐이고,
-#   SSM 세션로그·sudo로그·DB 감사로그는 별도 로그그룹/버킷 전송 자체가 안 되어 있음이
-#   확인됨 — "기준값 미확정"이 아니라 "미구현 상태 확인"이므로 SKIP이 아니라 FAIL로
-#   판정하는 게 정상이다(버그 아님, 인프라팀 구현 예정).
-#   u66_missing_log_categories 가 비어있지 않은 동안은 AWS 조회 없이 바로 FAIL 처리하고,
-#   인프라팀이 실제 로그그룹을 만들어 이 리스트가 빈 배열이 되면 log_retention_check.yml
-#   (기존 로그그룹 존재·보관기간 조회 공용 태스크)로 자동 전환된다.
+#   [2026-09-29 원문(2026 상세가이드 p166~169) 기준 재작성]
+#   원문 판단기준: 로그 기록 정책이 수립되어 설정돼 있고 "로그를 남기고 있는 경우" 양호. 조치는
+#   (r)syslog.conf에 로그 기록 정책 설정 — 점검 사례도 서버 로컬 로그(authpriv.* /var/log/secure 등).
+#   기존엔 보안_정책가이드(참고용 문서)의 "CloudWatch 로그그룹 전송·365일 보관"을 기준으로 FAIL을
+#   고정했는데, 중앙 수집·보관기간은 원문 U-66 기준이 아니었음(보관기간은 클라우드 4.12 소관).
+#   → 호스트마다 로깅 데몬이 동작하며 인증(auth/authpriv) 로그를 실제로 남기는지 확인:
+#     rsyslog 활성: 인증 facility를 파일로 남기는 규칙이 있고 그 파일에 기록이 있으면 양호
+#                   (*.info;authpriv.none 처럼 인증을 제외한 규칙은 불인정)
+#     journald만 활성(AL2023 기본): 디스크 영구 저장(/var/log/journal) + 인증 로그 기록이 있으면 양호
+#   로그 기록 정책 "문서" 수립 여부는 자동 확인 대상이 아니라 상세에 표시만 한다.
+#   인증 로그를 기준으로 삼은 이유: 원문 사례 전 OS에 공통으로 들어간 항목이고 sudo도 authpriv로 기록됨.
 # =============================================================================
 
-- name: "U-66 | 미구현 로그 항목 존재 시 FAIL(의도된 결과, 버그 아님)"
+# [2026-09-28 버그 수정] set_fact에 run_once를 쓰면 첫 호스트의 check_results가 같은 배치의 모든
+# 호스트에 복사됨(9/23·9/24 서버 4대 결과 동일 원인) — 호스트마다 실행한다.
+- name: "U-66 | 로깅 데몬 및 인증 로그 기록 여부 조회"
+  ansible.builtin.shell: |
+    if [ "$(systemctl is-active rsyslog 2>/dev/null)" = "active" ]; then
+      echo "DAEMON=rsyslog"
+      rule=$(awk '!/^[[:space:]]*(#|$)/ && $1 ~ /\./ && $2 ~ /^-?\// {
+        c = 0; w = 0; ex = 0; n = split($1, s, ";")
+        for (i = 1; i <= n; i++) {
+          split(s[i], f, ".")
+          if (f[1] ~ /(^|,)auth(priv)?(,|$)/) { if (f[2] == "none") ex = 1; else c = 1 }
+          else if (f[1] == "*" && f[2] != "none") w = 1
+        }
+        if (c || (w && !ex)) { sub(/^-/, "", $2); print $1 " " $2 }
+      }' /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null | head -1)
+      if [ -n "$rule" ]; then
+        echo "RULE=$rule"
+        [ -s "${rule##* }" ] && echo "RECORDED=${rule##* }"
+      fi
+    elif [ "$(systemctl is-active systemd-journald 2>/dev/null)" = "active" ]; then
+      echo "DAEMON=journald"
+      find /var/log/journal -name '*.journal' 2>/dev/null | grep -q . && echo "PERSISTENT=/var/log/journal"
+      last=$(journalctl -q --no-pager -o short-iso -n 1 SYSLOG_FACILITY=4 + SYSLOG_FACILITY=10 2>/dev/null | tail -1)
+      [ -n "$last" ] && echo "RECORDED=${last:0:120}"
+    else
+      echo "DAEMON=none"
+    fi
+    true
+  args:
+    executable: /bin/bash
+  register: u66_raw
+  changed_when: false
+  failed_when: false
+
+- name: "U-66 | 판정 기록"
+  vars:
+    u66_out: "{{ u66_raw.stdout | default('') }}"
+    u66_daemon: "{{ (u66_out | regex_search('DAEMON=(\\S+)', '\\1') or ['조회 실패']) | first }}"
+    u66_rule: "{{ (u66_out | regex_search('RULE=(.*)', '\\1') or ['']) | first }}"
+    u66_recorded: "{{ (u66_out | regex_search('RECORDED=(.*)', '\\1') or ['']) | first }}"
+    u66_persistent: "{{ 'PERSISTENT=' in u66_out }}"
+    u66_ok: "{{ u66_recorded | length > 0 and ((u66_daemon == 'rsyslog' and u66_rule | length > 0)
+                or (u66_daemon == 'journald' and u66_persistent)) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-66', 'item': '정책에 따른 시스템 로깅 설정', 'target': '전체(CloudWatch 로그그룹)',
-      'status': 'FAIL',
-      'detail': '미구현 확인된 필수 로그: ' ~ (u66_missing_log_categories | join(', ')) ~
-                ' — 인프라팀 구현 예정(조치 필요 항목으로 보고)'
+      'id': 'U-66', 'item': '정책에 따른 시스템 로깅 설정',
+      'status': 'PASS' if u66_ok else 'FAIL',
+      'detail': (
+        '동작 중인 로깅 데몬 없음(rsyslog·journald 모두 비활성) — 로그를 남기지 않음' if u66_daemon == 'none'
+        else ('로깅 데몬=' ~ u66_daemon
+              ~ (' / 인증 로그 규칙: ' ~ (u66_rule or '없음(인증 facility를 파일로 남기는 규칙 없음)') if u66_daemon == 'rsyslog'
+                 else ' / 디스크 영구 저장: ' ~ ('예(/var/log/journal)' if u66_persistent else '아니오(휘발성 — 재부팅 시 소실)'))
+              ~ ' / 인증 로그 기록: ' ~ (u66_recorded or '없음')
+              ~ ' | 참고: 로그 기록 정책 문서 수립 여부는 별도 확인')
+      )
     }] }}"
-  when: u66_missing_log_categories | default([]) | length > 0
-  run_once: true
-
-- name: "U-66 | 로그그룹 보관기간 점검(인프라팀 구현 완료 후 전환) — mgmt 서버 AWS API 조회"
-  ansible.builtin.include_role:
-    name: log_patch_check
-    tasks_from: log_retention_check
-  vars:
-    lrc_item_id: "U-66"
-    lrc_item_name: "정책에 따른 시스템 로깅 설정"
-    lrc_log_group_name: "{{ u66_log_group_name }}"
-    lrc_target: "전체(CloudWatch 로그그룹)"
-    lrc_min_days: "{{ u66_log_retention_min_days | default(365) }}"
-  when: u66_missing_log_categories | default([]) | length == 0
-  run_once: true

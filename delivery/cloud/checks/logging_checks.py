@@ -1,5 +1,4 @@
 """4.4~4.8, 4.11~4.12 — 통신구간 암호화 및 로깅 설정 점검."""
-import config
 from .common import make_result, safe_call
 
 
@@ -11,6 +10,7 @@ def check_4_4_transit_encryption(elbv2):
     for lb in lbs["LoadBalancers"]:
         listeners, lerr = safe_call(elbv2.describe_listeners, LoadBalancerArn=lb["LoadBalancerArn"])
         if lerr:
+            plaintext.append(f"{lb['LoadBalancerName']}(리스너 조회 실패: {lerr})")
             continue
         for l in listeners["Listeners"]:
             actions = l.get("DefaultActions", [])
@@ -50,13 +50,35 @@ def check_4_7_account_logging(trails):
     return [make_result("4.7", "AWS 사용자 계정 로깅 설정", status, detail)]
 
 
-def check_4_8_instance_logging(logs):
-    groups, err = safe_call(logs.describe_log_groups)
+def check_4_8_instance_logging(logs, ec2):
+    reservations, err = safe_call(ec2.describe_instances,
+                                  Filters=[{"Name": "instance-state-name", "Values": ["running"]}])
     if err:
-        return [make_result("4.8", "인스턴스 로깅 설정", "SKIP", f"로그그룹 조회 실패: {err}")]
-    status = "PASS" if groups["logGroups"] else "FAIL"
-    detail = f"CloudWatch 로그그룹 {len(groups['logGroups'])}개 존재" if groups["logGroups"] \
-        else "CloudWatch 로그그룹 없음 — 인스턴스 로그스트림 보관 미설정 추정(에이전트/네이밍 규칙에 따라 오탐 가능, 수동 확인 권장)"
+        return [make_result("4.8", "인스턴스 로깅 설정", "SKIP", f"EC2 인스턴스 조회 실패: {err}")]
+    instances = {i["InstanceId"]: (i.get("PrivateDnsName") or "").split(".")[0]
+                 for r in reservations["Reservations"] for i in r["Instances"]}
+    paginator = logs.get_paginator("describe_log_groups")
+    groups, gerr = safe_call(lambda: [g["logGroupName"] for page in paginator.paginate() for g in page["logGroups"]])
+    if gerr:
+        return [make_result("4.8", "인스턴스 로깅 설정", "SKIP", f"로그그룹 조회 실패: {gerr}")]
+    logged, errors = {}, set()
+    for iid, host in instances.items():
+        for group in groups:
+            for prefix in filter(None, (iid, host)):
+                res, lerr = safe_call(logs.describe_log_streams, logGroupName=group, logStreamNamePrefix=prefix, limit=1)
+                if lerr:
+                    errors.add(f"{group}({lerr})")
+                elif res["logStreams"]:
+                    logged[iid] = f"{group}/{res['logStreams'][0]['logStreamName']}"
+                    break
+            if iid in logged:
+                break
+    missing = [f"{iid}({instances[iid] or '-'})" for iid in instances if iid not in logged]
+    status = "PASS" if instances and not missing else ("REVIEW" if errors or not instances else "FAIL")
+    detail = (f"실행 중 인스턴스 {len(instances)}대 중 CloudWatch 로그 스트림 없는 인스턴스: "
+              + (", ".join(missing) if missing else "없음")
+              + (f" / 보관 중: {', '.join(f'{k}→{v}' for k, v in logged.items())}" if logged else "")
+              + (f" / 로그 스트림 조회 실패: {', '.join(sorted(errors))}" if errors else ""))
     return [make_result("4.8", "인스턴스 로깅 설정", status, detail)]
 
 
@@ -72,20 +94,6 @@ def check_4_11_vpc_flow_logs(ec2):
     return [make_result("4.11", "VPC 플로우 로깅 설정", status, detail)]
 
 
-def check_4_12_log_retention(logs):
-    groups, err = safe_call(logs.describe_log_groups)
-    if err:
-        return [make_result("4.12", "로그 보관 기간 설정", "SKIP", f"로그그룹 조회 실패: {err}")]
-    short_retention = [
-        g["logGroupName"] for g in groups["logGroups"]
-        if g.get("retentionInDays") and g["retentionInDays"] < config.LOG_RETENTION_MIN_DAYS
-    ]
-    status = "PASS" if not short_retention else "FAIL"
-    detail = f"기준({config.LOG_RETENTION_MIN_DAYS}일) 미만 보관 로그그룹: " + \
-             (", ".join(short_retention[:10]) if short_retention else "없음")
-    return [make_result("4.12", "로그 보관 기간 설정", status, detail)]
-
-
 def run_all(elbv2, logs, ec2, cloudtrail):
     trail_list, terr = safe_call(cloudtrail.describe_trails)
     trails = trail_list["trailList"] if not terr else []
@@ -98,7 +106,6 @@ def run_all(elbv2, logs, ec2, cloudtrail):
     results += check_4_5_cloudtrail_encryption(trails)
     results += check_4_6_cloudwatch_encryption(logs)
     results += check_4_7_account_logging(trails)
-    results += check_4_8_instance_logging(logs)
+    results += check_4_8_instance_logging(logs, ec2)
     results += check_4_11_vpc_flow_logs(ec2)
-    results += check_4_12_log_retention(logs)
     return results

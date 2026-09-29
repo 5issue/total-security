@@ -1,4 +1,4 @@
-# 인벤토리 예시 — SSM 커넥션 기반(SSH 키 미사용). 실제 인스턴스 ID를 채워서 사용.
+# 인벤토리 예시
 
 [server_targets]
 ; worker-node-1 ansible_host=i-xxxxxxxxxxxxxxxxx
@@ -6,8 +6,7 @@
 ; eks-nat-instance-2a ansible_host=i-zzzzzzzzzzzzzzzzz
 ; eks-nat-instance-2c ansible_host=i-wwwwwwwwwwwwwwwww
 
-# U-64가 워커노드/NAT를 서로 다른 AMI 기준으로 비교하기 위해 참조하는 그룹 — 실제 인스턴스
-# ID 확정 후 아래 그룹에도 정확히 배정할 것.
+# U-64 : 워커노드/NAT 인스턴스 그룹
 [eks_worker_nodes]
 ; worker-node-1
 ; worker-node-2

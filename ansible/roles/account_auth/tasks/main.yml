@@ -7,71 +7,113 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# U-01 | root 계정 원격 접속 차단
+# U-01 | root 계정 원격 접속 제한 [2026-09-28 원문(p12) 판단기준 재대조]
+#   원문 양호: 원격터미널 서비스를 사용하지 않거나, 사용 시 root 직접 접속을 차단한 경우.
+#   기존엔 sshd_config 본 파일 문자열만 봐서 sshd_config.d/ 설정(먼저 읽힌 값이 적용)을 놓치고
+#   sshd 미사용도 반영하지 못했음 → sshd가 꺼져 있으면 PASS, 켜져 있으면 `sshd -T`로 실제 적용값
+#   확인. prohibit-password 등은 키로 root 직접 접속이 가능해 FAIL(원문 조치: PermitRootLogin no).
 # -----------------------------------------------------------------------------
-- name: "U-01 | sshd_config PermitRootLogin 조회"
-  ansible.builtin.command: grep -Ei '^\s*PermitRootLogin' /etc/ssh/sshd_config
+- name: "U-01 | sshd 실행 여부 및 실제 적용 PermitRootLogin 조회"
+  ansible.builtin.shell: |
+    if ! systemctl is-active --quiet sshd; then echo "INACTIVE"; exit 0; fi
+    sshd -T 2>/dev/null | awk '$1=="permitrootlogin"{print $2}'
+  args:
+    executable: /bin/bash
   register: u01_raw
   changed_when: false
   failed_when: false
 
 - name: "U-01 | 판정 기록"
+  vars:
+    u01_value: "{{ u01_raw.stdout | default('') | trim | lower }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-01', 'item': 'root 계정 원격 접속 차단',
-      'status': 'PASS' if (u01_raw.stdout is defined and 'no' in u01_raw.stdout | lower) else 'FAIL',
-      'detail': u01_raw.stdout | default('PermitRootLogin 설정 없음(기본값 확인 필요)', true)
+      'id': 'U-01', 'item': 'root 계정 원격 접속 제한',
+      'status': 'PASS' if u01_value in ['inactive', 'no'] else 'FAIL',
+      'detail': ('sshd 미사용(원격터미널 서비스 비활성)' if u01_value == 'inactive'
+                 else '실제 적용 PermitRootLogin=' ~ (u01_value if u01_value | length > 0 else '조회 실패') ~ ' (기준: no)')
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-02 | 패스워드 복잡도 (OS 표준 기준, group_vars/all.yml 의 u02_pwquality)
+# U-02 | 비밀번호 관리정책 설정 [2026-09-28 원문(p15) 판단기준 재대조]
+#   원문 조치 기준: 영문·숫자·특수문자 포함 최소 8자리, 최소 사용기간 1일, 최대 사용기간 90일,
+#   최근 비밀번호 기억 4회 이상. 기존엔 minlen·dcredit만 확인했음 → 전체 요소 확인으로 확장.
+#   pwquality(pwquality.conf + conf.d, 뒤 파일 우선), login.defs(PASS_MAX/MIN_DAYS),
+#   remember(PAM 인자 > pwhistory.conf, pam_pwhistory만 있고 값이 없으면 모듈 기본값 10).
+#   명시 설정이 없는 값은 "정책 미설정"으로 FAIL(원문 판단기준이 "정책이 설정된 경우 양호").
 # -----------------------------------------------------------------------------
-- name: "U-02 | pwquality.conf 조회"
-  ansible.builtin.command: cat /etc/security/pwquality.conf
+- name: "U-02 | 비밀번호 정책 설정값 조회"
+  ansible.builtin.shell: |
+    get_kv() { sed -E 's/#.*//' "$@" 2>/dev/null | awk -F= -v k="$KEY" '{gsub(/[ \t]/,"",$1); gsub(/[ \t]/,"",$2)} $1==k {v=$2} END {print v}'; }
+    for k in minlen dcredit ucredit lcredit ocredit; do
+      echo "$k=$(KEY=$k get_kv /etc/security/pwquality.conf /etc/security/pwquality.conf.d/*.conf)"
+    done
+    echo "pass_max_days=$(awk '$1=="PASS_MAX_DAYS" {v=$2} END {print v}' /etc/login.defs)"
+    echo "pass_min_days=$(awk '$1=="PASS_MIN_DAYS" {v=$2} END {print v}' /etc/login.defs)"
+    pam="/etc/pam.d/system-auth /etc/pam.d/password-auth"
+    rem=$(grep -hE '^\s*password.*pam_(pwhistory|unix)\.so.*remember=' $pam 2>/dev/null | grep -oE 'remember=[0-9]+' | cut -d= -f2 | sort -n | tail -1)
+    if [ -z "$rem" ] && grep -qE '^\s*password.*pam_pwhistory\.so' $pam 2>/dev/null; then
+      rem=$(KEY=remember get_kv /etc/security/pwhistory.conf); rem=${rem:-10}
+    fi
+    echo "remember=$rem"
+  args:
+    executable: /bin/bash
   register: u02_raw
   changed_when: false
   failed_when: false
 
 - name: "U-02 | 판정 기록"
   vars:
-    u02_ok: >-
-      {{
-        (u02_raw.stdout is defined) and
-        (('minlen = ' ~ u02_pwquality.minlen) in u02_raw.stdout or ('minlen=' ~ u02_pwquality.minlen) in u02_raw.stdout) and
-        (('dcredit = ' ~ u02_pwquality.dcredit) in u02_raw.stdout or ('dcredit=' ~ u02_pwquality.dcredit) in u02_raw.stdout)
-      }}
+    u02_v: "{{ u02_raw.stdout_lines | default([]) | map('regex_replace', '^([a-z_]+)=(.*)$', '\\1: \"\\2\"') | join('\n') | from_yaml | default({}, true) }}"
+    u02_failed: >-
+      {{ []
+         + ([] if (u02_v.minlen | default('') | length > 0 and u02_v.minlen | int >= u02_pwquality.minlen) else ['최소 길이 ' ~ u02_pwquality.minlen ~ '자 이상(minlen)'])
+         + ([] if (u02_v.dcredit | default('') | length > 0 and u02_v.dcredit | int <= u02_pwquality.dcredit) else ['숫자 포함(dcredit)'])
+         + ([] if (u02_v.ocredit | default('') | length > 0 and u02_v.ocredit | int <= u02_pwquality.ocredit) else ['특수문자 포함(ocredit)'])
+         + ([] if ((u02_v.ucredit | default('') | length > 0 and u02_v.ucredit | int <= u02_pwquality.ucredit)
+                   or (u02_v.lcredit | default('') | length > 0 and u02_v.lcredit | int <= u02_pwquality.lcredit)) else ['영문 포함(ucredit/lcredit)'])
+         + ([] if (u02_v.pass_max_days | default('') | length > 0 and u02_v.pass_max_days | int <= u02_pass_max_days) else ['최대 사용기간 ' ~ u02_pass_max_days ~ '일 이하(PASS_MAX_DAYS)'])
+         + ([] if (u02_v.pass_min_days | default('') | length > 0 and u02_v.pass_min_days | int >= u02_pass_min_days) else ['최소 사용기간 ' ~ u02_pass_min_days ~ '일 이상(PASS_MIN_DAYS)'])
+         + ([] if (u02_v.remember | default('') | length > 0 and u02_v.remember | int >= u02_remember_min) else ['최근 비밀번호 ' ~ u02_remember_min ~ '회 이상 기억(remember)']) }}
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-02', 'item': '패스워드 최소 길이·복잡도',
-      'status': 'PASS' if u02_ok else 'FAIL',
-      'detail': u02_raw.stdout | default('pwquality.conf 조회 실패', true) | truncate(200)
+      'id': 'U-02', 'item': '비밀번호 관리정책 설정',
+      'status': 'PASS' if u02_failed | length == 0 else 'FAIL',
+      'detail': '미충족 기준: ' ~ (u02_failed | join(', ') if u02_failed | length > 0 else '없음') ~ ' / 현재값: ' ~ (u02_raw.stdout_lines | default([]) | join(', '))
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-03 | su 사용 제한 (pam_wheel) — 참고: pam_faillock 로그인 잠금과는 별개 항목
+# U-03 | 계정 잠금 임계값 설정 (pam_faillock) [2026-09-28 원문(p21) 판단기준 재대조]
 #   Amazon Linux 2023(RHEL계열)은 authselect 기반. system-auth/password-auth 확인.
+#   원문 양호: 계정 잠금 임계값이 10회 이하. 기존엔 faillock.conf 존재·PAM 참조만 보고 임계값을
+#   확인하지 않았음 → 실제 deny 값 확인 추가(PAM 인자 > faillock.conf > 모듈 기본값 3, 0은 잠금 없음).
 # -----------------------------------------------------------------------------
-- name: "U-03 | pam_faillock 설정 파일 존재 확인"
-  ansible.builtin.stat:
-    path: /etc/security/faillock.conf
-  register: u03_faillock_conf
-
-- name: "U-03 | pam.d 내 pam_faillock 참조 확인"
-  ansible.builtin.command: grep -rl pam_faillock /etc/pam.d/
-  register: u03_pam_ref
+- name: "U-03 | pam_faillock 적용 여부 및 잠금 임계값(deny) 조회"
+  ansible.builtin.shell: |
+    pam="/etc/pam.d/system-auth /etc/pam.d/password-auth"
+    if ! grep -qE '^\s*auth.*pam_faillock\.so' $pam 2>/dev/null; then echo "NO_PAM"; exit 0; fi
+    d=$(grep -hE '^\s*auth.*pam_faillock\.so.*deny=' $pam 2>/dev/null | grep -oE 'deny=[0-9]+' | cut -d= -f2 | sort -n | tail -1)
+    [ -z "$d" ] && d=$(sed -E 's/#.*//' /etc/security/faillock.conf 2>/dev/null | awk -F= '{gsub(/[ \t]/,"",$1); gsub(/[ \t]/,"",$2)} $1=="deny" {v=$2} END {print v}')
+    echo "${d:-3}"
+  args:
+    executable: /bin/bash
+  register: u03_raw
   changed_when: false
   failed_when: false
 
 - name: "U-03 | 판정 기록"
+  vars:
+    u03_value: "{{ u03_raw.stdout | default('') | trim }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'U-03', 'item': '계정 잠금 임계값 설정',
-      'status': 'PASS' if (u03_faillock_conf.stat.exists and u03_pam_ref.stdout | default('') | length > 0) else 'FAIL',
-      'detail': ('faillock.conf 존재: ' ~ (u03_faillock_conf.stat.exists | string) ~ ' / pam 참조: ' ~ (u03_pam_ref.stdout | default('없음', true)))
+      'status': 'PASS' if (u03_value is match('^[0-9]+$') and 0 < (u03_value | int) <= u03_deny_max) else 'FAIL',
+      'detail': ('PAM(system-auth/password-auth)에 pam_faillock 미적용 — 잠금 임계값 미설정' if u03_value == 'NO_PAM'
+                 else '잠금 임계값 deny=' ~ u03_value ~ ' (기준: 1~' ~ u03_deny_max ~ '회, 0은 잠금 없음)')
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-04 | /etc/shadow 분리 여부
+# U-04 | 비밀번호 파일 보호
 # -----------------------------------------------------------------------------
 - name: "U-04 | /etc/shadow 존재 확인"
   ansible.builtin.stat:
@@ -81,13 +123,13 @@
 - name: "U-04 | 판정 기록"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-04', 'item': '패스워드 정보 shadow 파일 분리',
+      'id': 'U-04', 'item': '비밀번호 파일 보호',
       'status': 'PASS' if u04_shadow.stat.exists else 'FAIL',
       'detail': '/etc/shadow exists=' ~ (u04_shadow.stat.exists | string)
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-05 | root 외 UID 0 계정 존재 여부 (절대기준)
+# U-05 | root 이외의 UID가 ‘0’ 금지 (절대기준)
 # -----------------------------------------------------------------------------
 - name: "U-05 | UID 0 계정 조회"
   ansible.builtin.shell: "set -o pipefail && awk -F: '$3 == 0 {print $1}' /etc/passwd"
@@ -102,13 +144,13 @@
     u05_others: "{{ (u05_raw.stdout_lines | default([])) | reject('equalto', 'root') | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-05', 'item': 'root 외 UID 0 계정 제한',
+      'id': 'U-05', 'item': 'root 이외의 UID가 ‘0’ 금지',
       'status': 'PASS' if (u05_others | length == 0) else 'FAIL',
       'detail': 'UID 0 계정: ' ~ (u05_raw.stdout_lines | default([]) | join(', '))
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-06 | su 명령어 제한 (pam_wheel)
+# U-06 | 사용자 계정 su 기능 제한 (pam_wheel)
 # -----------------------------------------------------------------------------
 - name: "U-06 | /etc/pam.d/su 내 pam_wheel 확인"
   ansible.builtin.command: grep -E '^\s*auth\s+(required|requisite)\s+pam_wheel\.so' /etc/pam.d/su
@@ -119,7 +161,7 @@
 - name: "U-06 | 판정 기록"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-06', 'item': 'su 명령어 사용 제한',
+      'id': 'U-06', 'item': '사용자 계정 su 기능 제한',
       'status': 'PASS' if (u06_raw.rc == 0) else 'FAIL',
       'detail': u06_raw.stdout | default('pam_wheel 설정 없음', true)
     }] }}"
@@ -169,7 +211,7 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-08 | root 그룹 권한 제한 [기준값필요: u08_root_group_admin_whitelist]
+# U-08 | 관리자 그룹에 최소한의 계정 포함 [기준값필요: u08_root_group_admin_whitelist]
 # -----------------------------------------------------------------------------
 - name: "U-08 | root 그룹 구성원 조회"
   ansible.builtin.shell: "set -o pipefail && getent group root | awk -F: '{print $4}'"
@@ -185,7 +227,7 @@
     u08_unauthorized: "{{ u08_members | difference(u08_root_group_admin_whitelist | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-08', 'item': 'root 그룹 권한 제한',
+      'id': 'U-08', 'item': '관리자 그룹에 최소한의 계정 포함',
       'status': (
         'SKIP' if u08_root_group_admin_whitelist is none else
         ('PASS' if u08_unauthorized | length == 0 else 'FAIL')
@@ -198,10 +240,19 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-09 | 중복 그룹 ID 없음 (절대기준)
+# U-09 | 계정이 존재하지 않는 GID 금지 [2026-09-28 원문(2026 상세가이드 p33) 기준 재작성]
+#   기존 "GID 중복" 점검은 원문 U-09가 아니었음(초기 항목표 착오). 원문 권고대로 /etc/group과
+#   /etc/passwd를 비교해, 어떤 계정의 기본 그룹도 아니고 보조 구성원도 없는 그룹을 찾는다.
+#   대상은 사용자 생성 그룹(GID >= login.defs GID_MIN, 기본 1000, nobody 65534 제외) — OS가
+#   만든 시스템 그룹(tty/disk 등)은 구성원이 없어도 파일 소유 그룹으로 쓰이는 정상 그룹.
+#   원문 "추후 권한 할당을 위해 먼저 생성했을 가능성" 확인 후 필요한 그룹은 u09_allowed_empty_groups에.
 # -----------------------------------------------------------------------------
-- name: "U-09 | GID 중복 조회"
-  ansible.builtin.shell: "set -o pipefail && awk -F: '{print $3}' /etc/group | sort | uniq -d"
+- name: "U-09 | 계정이 없는 그룹 조회(/etc/group ↔ /etc/passwd)"
+  ansible.builtin.shell: |
+    set -o pipefail
+    gid_min=$(awk '$1=="GID_MIN"{print $2}' /etc/login.defs 2>/dev/null)
+    awk -F: -v min="${gid_min:-1000}" 'NR==FNR {used[$4]=1; next}
+      $3+0 >= min+0 && $3 != 65534 && !($3 in used) && $4 == "" {print $1}' /etc/passwd /etc/group
   args:
     executable: /bin/bash
   register: u09_raw
@@ -209,15 +260,17 @@
   failed_when: false
 
 - name: "U-09 | 판정 기록"
+  vars:
+    u09_unauthorized: "{{ u09_raw.stdout_lines | default([]) | difference(u09_allowed_empty_groups | default([])) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-09', 'item': '그룹 ID 중복 금지',
-      'status': 'PASS' if (u09_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '중복 GID: ' ~ (u09_raw.stdout | default('없음', true))
+      'id': 'U-09', 'item': '계정이 존재하지 않는 GID 금지',
+      'status': 'PASS' if u09_unauthorized | length == 0 else 'FAIL',
+      'detail': '계정이 없는 사용자 생성 그룹(기본 그룹·보조 구성원 모두 없음): ' ~ (u09_unauthorized | join(', ') if u09_unauthorized | length > 0 else '없음')
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-10 | 중복 UID 없음 (절대기준)
+# U-10 | 동일한 UID 금지 (절대기준)
 # -----------------------------------------------------------------------------
 - name: "U-10 | UID 중복 조회"
   ansible.builtin.shell: "set -o pipefail && awk -F: '{print $3}' /etc/passwd | sort | uniq -d"
@@ -230,13 +283,13 @@
 - name: "U-10 | 판정 기록"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-10', 'item': '사용자 UID 중복 금지',
+      'id': 'U-10', 'item': '동일한 UID 금지',
       'status': 'PASS' if (u10_raw.stdout | default('') | length == 0) else 'FAIL',
       'detail': '중복 UID: ' ~ (u10_raw.stdout | default('없음', true))
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-11 | 시스템 계정 로그인 shell 제한
+# U-11 | 사용자 shell 점검
 # -----------------------------------------------------------------------------
 - name: "U-11 | UID_MIN 조회"
   ansible.builtin.shell: set -o pipefail && awk '/^UID_MIN/{print $2}' /etc/login.defs
@@ -261,13 +314,13 @@
 - name: "U-11 | 판정 기록"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-11', 'item': '시스템 계정 로그인 Shell 제한',
+      'id': 'U-11', 'item': '사용자 shell 점검',
       'status': 'PASS' if (u11_raw.stdout | default('') | length == 0) else 'FAIL',
       'detail': '로그인 가능 시스템 계정: ' ~ (u11_raw.stdout | default('없음', true))
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-12 | 비활성 세션 자동 종료 (TMOUT)
+# U-12 | 세션 종료 시간 설정 (TMOUT)
 # -----------------------------------------------------------------------------
 - name: "U-12 | TMOUT 설정 조회"
   ansible.builtin.shell: set -o pipefail && grep -rh '^\s*TMOUT=' /etc/profile /etc/profile.d/*.sh 2>/dev/null | head -1
@@ -282,13 +335,14 @@
     u12_value: "{{ (u12_raw.stdout | default('') | regex_search('[0-9]+')) | default('999999', true) | int }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-12', 'item': '비활성 세션 자동 종료(TMOUT)',
+      'id': 'U-12', 'item': '세션 종료 시간 설정',
       'status': 'PASS' if (u12_raw.stdout | default('') | length > 0 and u12_value <= u12_tmout_max_seconds) else 'FAIL',
       'detail': u12_raw.stdout | default('TMOUT 미설정', true)
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-13 | 패스워드 해시 알고리즘
+# U-13 | 안전한 비밀번호 암호화 알고리즘 사용 [2026-09-28 원문(p37) 재대조 — 원문 양호는 "SHA-2 이상"이라
+#   SHA512만이 아니라 SHA256도 허용(u13_allowed_encrypt_methods)]
 # -----------------------------------------------------------------------------
 - name: "U-13 | ENCRYPT_METHOD 조회"
   ansible.builtin.shell: set -o pipefail && grep -E '^\s*ENCRYPT_METHOD' /etc/login.defs
@@ -301,13 +355,14 @@
 - name: "U-13 | 판정 기록"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-13', 'item': '패스워드 안전 암호화 저장',
-      'status': 'PASS' if (u13_required_encrypt_method in (u13_raw.stdout | default(''))) else 'FAIL',
+      'id': 'U-13', 'item': '안전한 비밀번호 암호화 알고리즘 사용',
+      'status': 'PASS' if (u13_raw.stdout | default('') | upper | regex_replace('^\\s*ENCRYPT_METHOD\\s+', '') | trim) in u13_allowed_encrypt_methods else 'FAIL',
       'detail': u13_raw.stdout | default('ENCRYPT_METHOD 미설정(배포판 기본값 확인 필요)', true)
     }] }}"
 
 # -----------------------------------------------------------------------------
-# U-63 | sudo 접근(/etc/sudoers) 권한 관리
+# U-63 | sudo 명령어 접근 관리 [2026-09-28 원문(p159) 재대조 — 원문은 "640 초과면 취약"이라 허용
+#   목록(0440/0400/0640) 대신 640 이하 비교로 변경(0600 등도 양호)]
 # -----------------------------------------------------------------------------
 - name: "U-63 | /etc/sudoers 소유자·권한 조회"
   ansible.builtin.stat:
@@ -316,11 +371,11 @@
 
 - name: "U-63 | 판정 기록"
   vars:
-    u63_mode_ok: "{{ (u63_raw.stat.mode | default('000')) in ['0440', '0400', '0640'] }}"
+    u63_mode_ok: "{{ (u63_raw.stat.mode | default('0777') | int(base=8)) <= ('0640' | int(base=8)) }}"
     u63_owner_ok: "{{ u63_raw.stat.pw_name | default('') == 'root' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-63', 'item': 'sudo 접근(/etc/sudoers) 권한 관리',
+      'id': 'U-63', 'item': 'sudo 명령어 접근 관리',
       'status': 'PASS' if (u63_mode_ok and u63_owner_ok) else 'FAIL',
       'detail': 'owner=' ~ (u63_raw.stat.pw_name | default('?')) ~ ' mode=' ~ (u63_raw.stat.mode | default('?'))
     }] }}"

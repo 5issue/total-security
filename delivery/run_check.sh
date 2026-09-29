@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# run_check.sh — 인프라 점검 파이프라인 전체 실행
-#   사용법: ./run_check.sh <회차> [날짜(YYYYMMDD)]
-#   예시:   ./run_check.sh 1차 20260914
+# 인프라 점검 전체 실행
 set -euo pipefail
 
 ROUND="${1:?사용법: ./run_check.sh <회차> [날짜(YYYYMMDD)]}"

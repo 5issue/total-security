@@ -1,20 +1,51 @@
-"""3.7~3.8, 4.1~4.3, 4.9~4.10 — S3/EBS/RDS 저장소 보안 점검."""
+"""3.7~3.8, 4.1~4.3, 4.9~4.10, 4.12~4.13 — S3/EBS/RDS 저장소 보안·로그 보관·백업 점검."""
 import json
 
+import config
 from .common import make_result, safe_call
 
 
-def check_3_7_s3_public_access(s3control, account_id):
+PAB_KEYS = ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets")
+PUBLIC_GRANTEE_URIS = ("http://acs.amazonaws.com/groups/global/AllUsers",
+                       "http://acs.amazonaws.com/groups/global/AuthenticatedUsers")
+
+
+def check_3_7_s3_public_access(s3, s3control, account_id):
+    # [2026-09-28 원문(2024 클라우드 가이드 3.7) 재대조] 원문 양호: 퍼블릭 액세스 차단이 설정되어 있거나,
+    # 허용 시 ACL을 버킷 소유자에게만 설정한 경우. 기존엔 계정 단위 차단만 보고 없으면 바로 FAIL이었음 →
+    # 계정 단위 차단이 없으면 버킷마다 (버킷 단위 차단) 또는 (ACL이 모든 사람·외부 계정에 부여되지 않음) 확인.
     if not account_id:
         return [make_result("3.7", "S3 버킷/객체 접근 관리", "SKIP", "계정 ID 조회 실패")]
     conf, err = safe_call(s3control.get_public_access_block, AccountId=account_id)
-    if err:
-        return [make_result("3.7", "S3 버킷/객체 접근 관리", "FAIL", f"계정레벨 퍼블릭 액세스 차단 미설정: {err}")]
-    block = conf["PublicAccessBlockConfiguration"]
-    ok = all(block.get(k) for k in
-             ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets"))
-    status = "PASS" if ok else "FAIL"
-    return [make_result("3.7", "S3 버킷/객체 접근 관리", status, str(block))]
+    account_block = {} if err else conf["PublicAccessBlockConfiguration"]
+    if all(account_block.get(k) for k in PAB_KEYS):
+        return [make_result("3.7", "S3 버킷/객체 접근 관리", "PASS", f"계정 단위 퍼블릭 액세스 차단 설정: {account_block}")]
+
+    buckets, berr = safe_call(s3.list_buckets)
+    if berr:
+        return [make_result("3.7", "S3 버킷/객체 접근 관리", "SKIP",
+                             f"계정 단위 차단 미설정, 버킷 목록 조회 실패: {berr}")]
+    owner_id = buckets.get("Owner", {}).get("ID")
+    offenders, unknown = [], []
+    for b in buckets["Buckets"]:
+        name = b["Name"]
+        pab, perr = safe_call(s3.get_public_access_block, Bucket=name)
+        if not perr and all(pab["PublicAccessBlockConfiguration"].get(k) for k in PAB_KEYS):
+            continue
+        acl, aerr = safe_call(s3.get_bucket_acl, Bucket=name)
+        if aerr:
+            unknown.append(f"{name}(ACL 조회 실패)")
+            continue
+        exposed = [g["Grantee"].get("URI") or g["Grantee"].get("ID") for g in acl["Grants"]
+                   if g["Grantee"].get("URI") in PUBLIC_GRANTEE_URIS
+                   or (g["Grantee"].get("Type") == "CanonicalUser" and g["Grantee"].get("ID") != owner_id)]
+        if exposed:
+            offenders.append(f"{name}(차단 미설정 + ACL 공개/외부 계정 부여)")
+    status = "FAIL" if offenders else ("REVIEW" if unknown else "PASS")
+    detail = ("계정 단위 퍼블릭 액세스 차단 미설정 — 버킷별 확인: 차단 미설정이면서 ACL이 모든 사람·외부 계정에 부여된 버킷: "
+              + (", ".join(offenders) if offenders else "없음")
+              + (f" / 확인 불가: {', '.join(unknown)}" if unknown else ""))
+    return [make_result("3.7", "S3 버킷/객체 접근 관리", status, detail)]
 
 
 def _rds_instances(rds):
@@ -30,12 +61,22 @@ def check_3_8_rds_subnet(rds_instances):
 
 
 def check_4_1_ebs_encryption(ec2):
+    # [2026-09-28 원문 재대조] 원문 양호: EBS 및 볼륨 리소스에 암호화가 활성화된 경우. 기존엔 계정 기본
+    # 암호화 설정만 봐서, 설정 이전에 만든 미암호화 볼륨을 놓쳤음 → 실제 볼륨 암호화 여부도 확인.
     conf, err = safe_call(ec2.get_ebs_encryption_by_default)
     if err:
         return [make_result("4.1", "EBS 및 볼륨 암호화 설정", "SKIP", f"조회 실패: {err}")]
-    status = "PASS" if conf["EbsEncryptionByDefault"] else "FAIL"
-    return [make_result("4.1", "EBS 및 볼륨 암호화 설정", status,
-                         f"계정 기본 EBS 암호화={conf['EbsEncryptionByDefault']}")]
+    unencrypted, verr = [], None
+    paginator = ec2.get_paginator("describe_volumes")
+    pages, verr = safe_call(lambda: list(paginator.paginate(Filters=[{"Name": "encrypted", "Values": ["false"]}])))
+    if not verr:
+        unencrypted = [v["VolumeId"] for page in pages for v in page["Volumes"]]
+    default_on = conf["EbsEncryptionByDefault"]
+    status = "PASS" if default_on and not unencrypted and not verr else "FAIL"
+    detail = (f"계정 기본 EBS 암호화={default_on} / 미암호화 볼륨: "
+              + (f"조회 실패({verr})" if verr else (", ".join(unencrypted[:10]) + (f" 외 {len(unencrypted) - 10}개" if len(unencrypted) > 10 else "")
+                                                   if unencrypted else "없음")))
+    return [make_result("4.1", "EBS 및 볼륨 암호화 설정", status, detail)]
 
 
 def check_4_2_rds_encryption(rds_instances):
@@ -153,10 +194,61 @@ def check_4_10_s3_access_logging(s3, log_buckets, detect_errors):
     return [make_result("4.10", item, status, detail)]
 
 
-def run_all(ec2, s3, s3control, rds, account_id, cloudtrail, elbv2, ssm, awsconfig):
+def check_4_12_log_retention(logs, s3, log_buckets, detect_errors):
+    # [2026-09-29 원문(p153) 재대조] 원문 양호: AWS 서비스 로그를 기준(최소 1년 이상)에 맞게 보관하는 경우.
+    # 기존엔 CloudWatch 로그그룹만 봐서 S3에 쌓이는 서비스 로그(CloudTrail·ALB·VPC 플로우·SSM 세션·Config)를
+    # 놓쳤음 → 4.10과 같은 방식으로 자동 탐지한 로그 보관 버킷의 수명주기 삭제(Expiration) 일수도 확인.
+    # 수명주기 규칙이 없거나 삭제 규칙이 없으면 삭제되지 않고 보관되므로 충족. (logging_checks에서 이동)
+    # ponytail: 활성 Expiration(Days) 규칙은 접두사와 무관하게 판정 — 날짜 지정 삭제·다른 접두사 규칙까지 가리진 않음
+    item = "로그 보관 기간 설정"
+    short, notes = [], []
+    paginator = logs.get_paginator("describe_log_groups")
+    groups, gerr = safe_call(lambda: [g for page in paginator.paginate() for g in page["logGroups"]])
+    if gerr:
+        notes.append(f"CloudWatch 로그그룹 조회 실패: {gerr}")
+    else:
+        short += [f"{g['logGroupName']}({g['retentionInDays']}일)" for g in groups
+                  if g.get("retentionInDays") and g["retentionInDays"] < config.LOG_RETENTION_MIN_DAYS]
+    for bucket, sources in sorted(log_buckets.items()):
+        lc, lerr = safe_call(s3.get_bucket_lifecycle_configuration, Bucket=bucket)
+        if lerr:
+            if "NoSuchLifecycleConfiguration" not in lerr:
+                notes.append(f"s3://{bucket} 수명주기 조회 실패: {lerr}")
+            continue
+        days = [r["Expiration"]["Days"] for r in lc.get("Rules", [])
+                if r.get("Status") == "Enabled" and r.get("Expiration", {}).get("Days")]
+        if days and min(days) < config.LOG_RETENTION_MIN_DAYS:
+            short.append(f"s3://{bucket}({'/'.join(sorted(sources))}, {min(days)}일 후 삭제)")
+    notes += [f"로그 버킷 탐지 실패 출처: {', '.join(detect_errors)}"] if detect_errors else []
+    status = "FAIL" if short else ("REVIEW" if notes else "PASS")
+    detail = (f"기준({config.LOG_RETENTION_MIN_DAYS}일) 미만 보관 — CloudWatch 로그그룹·S3 로그 버킷: "
+              + (", ".join(short[:10]) + (f" 외 {len(short) - 10}건" if len(short) > 10 else "") if short else "없음")
+              + f" (확인한 S3 로그 버킷 {len(log_buckets)}개)"
+              + (" / " + " / ".join(notes) if notes else ""))
+    return [make_result("4.12", item, status, detail)]
+
+
+def check_4_13_backup_policy(backup, dlm):
+    # [2026-09-28 원문 재대조 — N/A 해제, 사용자 확정] 원문 양호: 클라우드 리소스 백업 정책이 존재하는 경우.
+    # AWS 네이티브 백업 정책(AWS Backup 백업 계획, EBS 스냅샷 수명주기 정책(DLM, 활성))을 확인한다.
+    # DB는 MOCO·CNPG 오퍼레이터가 S3로 백업하는 구조라 이 조회에는 잡히지 않음(상세에 명시).
+    plans, perr = safe_call(backup.list_backup_plans)
+    policies, derr = safe_call(dlm.get_lifecycle_policies, State="ENABLED")
+    if perr and derr:
+        return [make_result("4.13", "백업 사용 여부", "SKIP", f"AWS Backup 조회 실패: {perr} / DLM 조회 실패: {derr}")]
+    plan_names = [] if perr else [p["BackupPlanName"] for p in plans.get("BackupPlansList", [])]
+    policy_ids = [] if derr else [p["PolicyId"] for p in policies.get("Policies", [])]
+    status = "PASS" if (plan_names or policy_ids) else ("REVIEW" if (perr or derr) else "FAIL")
+    detail = ("AWS Backup 백업 계획: " + (f"조회 실패({perr})" if perr else (", ".join(plan_names) or "없음"))
+              + " / 활성 DLM(EBS 스냅샷) 정책: " + (f"조회 실패({derr})" if derr else (", ".join(policy_ids) or "없음"))
+              + " — 참고: DB는 MOCO·CNPG 오퍼레이터가 S3로 백업(이 조회 대상 아님)")
+    return [make_result("4.13", "백업 사용 여부", status, detail)]
+
+
+def run_all(ec2, s3, s3control, rds, account_id, cloudtrail, elbv2, ssm, awsconfig, backup, dlm, logs):
     rds_instances, _ = _rds_instances(rds)
     results = []
-    results += check_3_7_s3_public_access(s3control, account_id)
+    results += check_3_7_s3_public_access(s3, s3control, account_id)
     results += check_3_8_rds_subnet(rds_instances)
     results += check_4_1_ebs_encryption(ec2)
     results += check_4_2_rds_encryption(rds_instances)
@@ -164,4 +256,6 @@ def run_all(ec2, s3, s3control, rds, account_id, cloudtrail, elbv2, ssm, awsconf
     results += check_4_9_rds_logging(rds_instances)
     log_buckets, detect_errors = _log_storage_buckets(cloudtrail, elbv2, ec2, ssm, awsconfig)
     results += check_4_10_s3_access_logging(s3, log_buckets, detect_errors)
+    results += check_4_12_log_retention(logs, s3, log_buckets, detect_errors)
+    results += check_4_13_backup_policy(backup, dlm)
     return results

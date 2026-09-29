@@ -17,9 +17,6 @@ IAM_ACCOUNT_OWNER_MAP = {
 }
 IAM_SHARED_ACCOUNT_EXCEPTIONS = []
 
-# 3.10⑤ — 테스트 ELB Idle Timeout 기준(초)
-ELB_IDLE_TIMEOUT_SECONDS = 120
-
 # 1.4 — 테스트 계정 그룹 예시
 IAM_GROUP_WHITELIST = {
     "Admins": ["test-admin"],

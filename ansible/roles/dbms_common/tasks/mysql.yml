@@ -42,7 +42,7 @@
   when: mysql_admin_password | length == 0
 
 # -----------------------------------------------------------------------------
-# D-01 | 기본 계정 초기 비밀번호 변경·잠금 상태 (root — 모든 호스트)
+# D-01 | 기본 계정의 비밀번호, 정책 등을 변경하여 사용 (root — 모든 호스트)
 #   [2026-09-24] 원문 양호기준 "초기 비밀번호를 변경하거나 잠금설정한 경우" — 두 조건을 모두 점검.
 #   원래 비밀번호와의 대조는 해시 저장이라 불가하므로, 초기 상태(빈 비밀번호 / 설치 시 발급되는
 #   만료된 임시 비밀번호)를 벗어났는지로 "변경"을 판단: 비밀번호 설정 + password_expired=N.
@@ -79,7 +79,7 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# D-02 | 불필요 계정 제거 [확정 — 2026-09-13 인프라팀 노션 회신]
+# D-02 | 데이터베이스의 불필요 계정을 제거하거나, 잠금설정 후 사용 [확정 — 2026-09-13 인프라팀 노션 회신]
 #   d02_unnecessary_account_whitelist(8개 서비스 계정) 외 계정 존재 시 FAIL(root는 쿼리에서 제외됨)
 #   [2026-09-24] 원문 항목명 "불필요 계정을 제거하거나, 잠금설정 후 사용" — 잠긴 계정(account_locked=Y)은
 #   원문상 허용이라 판정에서 제외하고 상세에 별도 표시(기존엔 잠가도 FAIL로 잡혔음).
@@ -107,7 +107,7 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# D-03 | 비밀번호 사용기간·복잡도 [법적 근거 있는 기준 — 2026-09-22 재정리]
+# D-03 | 비밀번호 사용 기간 및 복잡도를 기관의 정책에 맞도록 설정 [법적 근거 있는 기준 — 2026-09-22 재정리]
 #   서비스 계정은 자동 로테이션 없이 강제 만료 시 장애 위험이 커 실제 미적용 상태 —
 #   예외 처리(N/A) 없이 FAIL로 정직하게 보고한다. 대신 이 정책 전용 유저 계정을
 #   인프라팀이 신규 생성하기로 확정 — 계정명은 group_vars/all.yml의
@@ -116,7 +116,7 @@
 - name: "{{ db_conn.service }} | D-03 판정 기록(서비스 계정 — 법정 기준 미적용)"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'D-03', 'item': '비밀번호의 사용기간 및 복잡도를 기관의 정책에 맞도록 설정', 'target': db_conn.service,
+      'id': 'D-03', 'item': '비밀번호 사용 기간 및 복잡도를 기관의 정책에 맞도록 설정', 'target': db_conn.service,
       'status': 'FAIL',
       'detail': '서비스 계정에 비밀번호 만료(90일)·복잡도 정책 미적용 — 자동 로테이션 없이 강제 만료 시 서비스 장애 위험(DBA 협의). 법적 근거 있는 기준이라 예외 처리하지 않고 미준수로 보고. 전용 유저 계정에는 이 정책을 적용 중(아래 별도 행 참고)'
     }] }}"
@@ -169,7 +169,7 @@
     d03_rotation_desc: "{{ ('최근 교체 ' ~ d03_rotation_days ~ '일 전') if d03_rotation_days | int >= 0 else '교체 이력 없음' }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'D-03', 'item': '비밀번호의 사용기간 및 복잡도를 기관의 정책에 맞도록 설정', 'target': '전체(MySQL 유저 계정)',
+      'id': 'D-03', 'item': '비밀번호 사용 기간 및 복잡도를 기관의 정책에 맞도록 설정', 'target': '전체(MySQL 유저 계정)',
       'status': (
         'FAIL' if d03_user_accounts.mysql | length == 0 else
         ('FAIL' if not d03_query_ok else
@@ -186,7 +186,7 @@
   when: check_results | selectattr('id', 'equalto', 'D-03') | selectattr('target', 'equalto', '전체(MySQL 유저 계정)') | list | length == 0
 
 # -----------------------------------------------------------------------------
-# D-04 | 관리자 권한 최소 인원 [확정 — 2026-09-13 인프라팀 노션 회신]
+# D-04 | 데이터베이스 관리자 권한을 꼭 필요한 계정 및 그룹에 대해서만 허용 [확정 — 2026-09-13 인프라팀 노션 회신]
 #   root는 이미 쿼리에서 제외됨 — 화이트리스트(d04_admin_account_whitelist)는 빈 리스트라
 #   그 외 SUPER/SYSTEM_USER 보유 계정이 하나라도 조회되면 FAIL.
 # -----------------------------------------------------------------------------
@@ -215,7 +215,7 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# D-05 | 비밀번호 재사용 제한 [원문 대상에 MySQL 미기재 — d05_applicable 로 게이트]
+# D-05 | 비밀번호 재사용에 대한 제약 설정 [원문 대상에 MySQL 미기재 — d05_applicable 로 게이트]
 # -----------------------------------------------------------------------------
 - name: "{{ db_conn.service }} | D-05 password_history 설정 조회"
   ansible.builtin.include_tasks: db_exec_query.yml
@@ -247,7 +247,7 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# D-06 | 계정 개별 부여(공용 계정 금지) [확정 — 2026-09-13 인프라팀 노션 회신]
+# D-06 | DB 사용자 계정을 개별적으로 부여하여 사용 [확정 — 2026-09-13 인프라팀 노션 회신]
 #   [2026-09-24 점검 방법 변경 — 원문 기준(공용 계정 사용 시 취약)은 그대로] 공용 클러스터
 #   (DB 4개가 MySQL 1개 공유)라 "서버 전체 계정이 1개여야 함"은 원문이 묻지 않는 조건이었음.
 #   이 DB(스키마)에 권한이 있는 계정(mysql.db/tables_priv)이 매핑된 전용 계정뿐인지 본다 —
@@ -305,7 +305,7 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# D-09 | 로그인 실패 잠금 — MySQL 8.0.19+ 에서만 네이티브 지원 (버전 게이트)
+# D-09 | 일정 횟수의 로그인 실패 시 이에 대한 잠금정책 설정 — MySQL 8.0.19+ 에서만 네이티브 지원 (버전 게이트)
 # -----------------------------------------------------------------------------
 - name: "{{ db_conn.service }} | D-09 MySQL 버전 조회"
   ansible.builtin.include_tasks: db_exec_query.yml
@@ -365,7 +365,7 @@
 # K8s NetworkPolicy 기반으로 변경됨 — roles/dbms_common/tasks/k8s_pod_checks.yml 참고(spec 2.3절).
 
 # -----------------------------------------------------------------------------
-# D-11 | 시스템 테이블 접근 제한 (mysql.* 스키마, PUBLIC/일반 사용자 REVOKE 여부)
+# D-11 | DBA 이외의 인가되지 않은 사용자가 시스템 테이블에 접근할 수 없도록 설정 (mysql.* 스키마, PUBLIC/일반 사용자 REVOKE 여부)
 # -----------------------------------------------------------------------------
 - name: "{{ db_conn.service }} | D-11 mysql 스키마 권한 조회"
   ansible.builtin.include_tasks: db_exec_query.yml
@@ -378,38 +378,27 @@
     d11_extra: "{{ d11_raw.query_result | default([]) | first | default([]) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'D-11', 'item': '시스템 테이블 접근 제한', 'target': db_conn.service,
+      'id': 'D-11', 'item': 'DBA 이외의 인가되지 않은 사용자가 시스템 테이블에 접근할 수 없도록 설정', 'target': db_conn.service,
       'status': 'PASS' if (d11_raw.query_result is defined and d11_extra | length == 0) else 'FAIL',
       'detail': '조회 실패' if d11_raw.query_result is not defined else ('비관리자 접근 권한: ' ~ (d11_extra | string | truncate(150) if d11_extra | length > 0 else '없음'))
     }] }}"
 
 # -----------------------------------------------------------------------------
-# D-17 | Audit Table 접근 제한 — MySQL 감사 플러그인 활성화 여부로 직접 판정(PostgreSQL의
-#   pgaudit 로드 여부 판정과 동일 원칙). [2026-09-23] 인프라팀 회신으로 오픈소스 Audit
-#   Plugin 후보는 있으나 보안/버전 지원 검토 중이라 아직 미도입 확정 — "회신 대기"가 아니라
-#   "현재 미구현"이므로 SKIP이 아니라 실측 FAIL로 전환. 도입 완료 시 별도 코드 수정 없이
-#   자동으로 PASS 전환됨.
+# D-17 | Audit Table은 데이터베이스 관리자 계정으로 접근하도록 제한 [2026-09-28 원문(p646) 재대조 — N/A]
+#   원문은 감사 기록을 담은 "Audit Table"(예: Oracle AUD$)의 접근 권한을 관리자로 제한하는 항목.
+#   MySQL는 감사 기록을 테이블이 아니라 로그 파일로 남겨(감사 플러그인/pgAudit) 점검할 Audit Table
+#   자체가 없음 → 해당없음(사용자 확정). 기존엔 감사 플러그인 도입 여부로 FAIL 판정했으나 이는 감사
+#   기록 정책(D-26) 사안이라 D-26에서 판정.
 # -----------------------------------------------------------------------------
-- name: "{{ db_conn.service }} | D-17 감사 플러그인 활성화 여부 조회"
-  ansible.builtin.include_tasks: db_exec_query.yml
-  vars:
-    dbq_name: d17_raw
-    dbq_sql: "SELECT PLUGIN_NAME, PLUGIN_STATUS FROM information_schema.PLUGINS WHERE PLUGIN_NAME LIKE '%audit%'"
-
-# 2026-09-24 — 기존엔 조회 실패도 "플러그인 없음"으로 표시돼 실제 결과처럼 보였음 → 조회 실패 분리
-- name: "{{ db_conn.service }} | D-17 판정 기록"
-  vars:
-    d17_plugins: "{{ d17_raw.query_result | default([]) | first | default([]) }}"
-    d17_active: "{{ d17_plugins | selectattr('PLUGIN_STATUS', 'equalto', 'ACTIVE') | list }}"
+- name: "{{ db_conn.service }} | D-17 판정 기록(해당없음)"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-17', 'item': 'Audit Table은 데이터베이스 관리자 계정으로 접근하도록 제한', 'target': db_conn.service,
-      'status': 'PASS' if d17_active | length > 0 else 'FAIL',
-      'detail': '조회 실패' if d17_raw.query_result is not defined else (('활성 감사 플러그인: ' ~ (d17_active | map(attribute='PLUGIN_NAME') | join(', '))) if d17_active | length > 0 else '활성화된 감사 플러그인 없음 — 오픈소스 Audit Plugin 도입 검토 중(보안·버전 지원 확인 중), 도입 전까지 감사기록 파이프라인 미구성으로 취약 판정')
+      'status': 'N/A',
+      'detail': 'MySQL는 감사 기록을 테이블이 아닌 로그 파일로 저장해 점검 대상 Audit Table이 없음 — 해당없음(감사 기록 정책은 D-26에서 판정)'
     }] }}"
-
 # -----------------------------------------------------------------------------
-# D-18 | PUBLIC Role — MySQL은 해당 개념 자체가 없음(원문·검증 완료)
+# D-18 | 응용프로그램 또는 DBA 계정의 Role이 Public으로 설정되지 않도록 조정 — MySQL은 해당 개념 자체가 없음(원문·검증 완료)
 # -----------------------------------------------------------------------------
 - name: "{{ db_conn.service }} | D-18 판정 기록(해당없음)"
   ansible.builtin.set_fact:
@@ -420,18 +409,18 @@
     }] }}"
 
 # -----------------------------------------------------------------------------
-# D-20 | 인가되지 않은 Object Owner 제한 — 원문상 PostgreSQL 서비스에만 적용
+# D-20 | 인가되지 않은 Object Owner의 제한 — MySQL은 테이블 소유자(Object Owner) 개념이 없음(해당없음)
 # -----------------------------------------------------------------------------
 - name: "{{ db_conn.service }} | D-20 판정 기록(해당없음)"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
       'id': 'D-20', 'item': '인가되지 않은 Object Owner의 제한', 'target': db_conn.service,
       'status': 'N/A',
-      'detail': '원문 적용대상이 PostgreSQL 서비스로 한정(MySQL 서비스는 제외 검토, spec 2.1절 근거)'
+      'detail': 'MySQL은 테이블 소유자(Object Owner) 개념이 없음(권한은 user@host 단위로만 부여) — 해당없음'
     }] }}"
 
 # -----------------------------------------------------------------------------
-# D-21 | GRANT OPTION 부여 현황 [확정 — 2026-09-14 인프라팀 회신]
+# D-21 | 인가되지 않은 GRANT OPTION 사용 제한 [확정 — 2026-09-14 인프라팀 회신]
 #   관리자 계정(root/postgres)에 한해서만 허용, 그 외 계정(D-02 서비스 계정 포함)이
 #   GRANT OPTION을 보유하면 FAIL. d21_grant_option_admin_whitelist(group_vars/all.yml) 참고.
 # -----------------------------------------------------------------------------
@@ -453,9 +442,58 @@
       'detail': '조회 실패' if not d21_query_ok else ('GRANT OPTION 보유 계정: ' ~ (d21_grantees | join(', ') if d21_grantees | length > 0 else '없음') ~ ' / 화이트리스트(' ~ (d21_grant_option_admin_whitelist | join(', ')) ~ ') 외: ' ~ (d21_unauthorized | join(', ') if d21_unauthorized | length > 0 else '없음'))
     }] }}"
 
-# D-25(주기적 보안 패치)는 2026-09-14 인프라팀 회신으로 DB 파드 내부 apt 조회 기반으로
-# 재설계됨 — roles/dbms_common/tasks/k8s_pod_checks.yml 참고(DB 클라이언트 쿼리가 아니라
-# 파드 내부 명령 실행이 필요해 D-07/D-14/D-10과 같은 파일로 이동).
+# -----------------------------------------------------------------------------
+# D-25 | 주기적 보안 패치 및 벤더 권고 사항 적용 [2026-09-29 원문(p663) 기준 재작성]
+#   원문 양호: 보안 패치가 적용된 버전(의 DBMS)을 사용하는 경우. 기존엔 DB 파드 OS 패키지(apt list
+#   --upgradable)로 판정했는데(2026-09-14 인프라팀 확정 방식) 원문은 DB 버전을 묻는 항목이라, 실행 중인
+#   DB 버전을 벤더가 지원 중인 메이저 버전의 최신 패치 버전(d25_db_latest_versions)과 비교한다.
+#   지원 종료 메이저(목록에 없음) 또는 최신 패치 미만이면 FAIL.
+#   MySQL은 D-09에서 조회한 VERSION()을 재사용(8.0.41-… 처럼 뒤에 붙는 표기는 제거).
+# -----------------------------------------------------------------------------
+- name: "{{ db_conn.service }} | D-25 판정 기록"
+  vars:
+    d25_ok: "{{ d09_version_raw.query_result is defined }}"
+    d25_ver: "{{ ((d09_version_raw.query_result[0][0].values() | first | string) if d25_ok else '') | regex_replace('^([0-9]+(\\.[0-9]+)*).*$', '\\1') }}"
+    d25_major: "{{ d25_ver.split('.')[:2] | join('.') }}"
+    d25_latest: "{{ d25_db_latest_versions.mysql[d25_major] | default('') }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'D-25', 'item': '주기적 보안 패치 및 벤더 권고 사항 적용', 'target': db_conn.service,
+      'status': 'PASS' if (d25_ok and d25_latest | length > 0 and d25_ver is version(d25_latest, '>=')) else 'FAIL',
+      'detail': '조회 실패' if not d25_ok else
+                ('MySQL ' ~ d25_ver ~ ' — ' ~ (('지원 종료 메이저 버전(' ~ d25_major ~ '), 지원 중: ' ~ (d25_db_latest_versions.mysql | dict2items | map(attribute='value') | join(', '))) if d25_latest | length == 0
+                 else ('최신 보안 패치 버전 ' ~ d25_latest ~ (' 적용' if d25_ver is version(d25_latest, '>=') else ' 미만'))) ~ ' (기준: ' ~ d25_db_latest_versions_as_of ~ ' 벤더 공식 발표)')
+    }] }}"
+
+
+# -----------------------------------------------------------------------------
+# D-26 | 데이터베이스의 접근, 변경, 삭제 등의 감사 기록이 기관의 감사 기록 정책에 적합하도록 설정
+#   [2026-09-29 원문(p666) 기준 재작성] 원문 취약: DBMS에 대한 감사 로그 저장을 하지 않거나 정책 설정이
+#   적용되지 않은 경우. 기존엔 보안_정책가이드(참고용) 기준 "CloudWatch 연동·365일 보관"으로 FAIL을 고정
+#   했는데 원문 기준이 아니었음(U-66과 같은 착오) → DB가 접근·변경 감사 기록을 실제로 남기도록 설정돼
+#   있는지 조회한다. 감사 로그 저장 "정책 문서" 수립 여부는 자동 확인 대상이 아니라 상세에 표시만 한다.
+#   MySQL: 감사 플러그인(audit_log·server_audit 등) ACTIVE 또는 general_log=ON(접속·쿼리 전체 기록)이면 양호.
+# -----------------------------------------------------------------------------
+- name: "{{ db_conn.service }} | D-26 감사 기록 설정 조회"
+  ansible.builtin.include_tasks: db_exec_query.yml
+  vars:
+    dbq_name: d26_raw
+    dbq_sql: "SELECT (SELECT GROUP_CONCAT(PLUGIN_NAME) FROM information_schema.PLUGINS WHERE PLUGIN_NAME LIKE '%audit%' AND PLUGIN_STATUS='ACTIVE') AS audit_plugins, @@global.general_log AS general_log"
+
+- name: "{{ db_conn.service }} | D-26 판정 기록"
+  vars:
+    d26_row: "{{ d26_raw.query_result | default([]) | first | default([]) | first | default({}) }}"
+    d26_plugins: "{{ d26_row.audit_plugins | default('', true) | string | regex_replace('^(None|NULL)$', '') }}"
+    d26_general: "{{ (d26_row.general_log | default('0') | string) in ['1', 'ON'] }}"
+  ansible.builtin.set_fact:
+    check_results: "{{ check_results + [{
+      'id': 'D-26', 'item': '데이터베이스의 접근, 변경, 삭제 등의 감사 기록이 기관의 감사 기록 정책에 적합하도록 설정', 'target': db_conn.service,
+      'status': 'PASS' if (d26_raw.query_result is defined and (d26_plugins | length > 0 or d26_general)) else 'FAIL',
+      'detail': '조회 실패' if d26_raw.query_result is not defined else
+                ('활성 감사 플러그인: ' ~ (d26_plugins or '없음') ~ ' / general_log: ' ~ ('ON' if d26_general else 'OFF')
+                 ~ (' — DB 감사 기록 미설정' if not (d26_plugins | length > 0 or d26_general) else '')
+                 ~ ' | 참고: 감사 로그 저장 정책 문서 수립 여부는 별도 확인')
+    }] }}"
 
 - name: "{{ db_conn.service }} | 조회 실패 원인 기록"
   ansible.builtin.include_tasks: db_exec_errors.yml

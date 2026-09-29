@@ -1,9 +1,4 @@
-"""1.11~1.13, 2.1~2.2, 3.9, 4.14~4.15 — EKS 점검 (boto3 + kubernetes 파이썬 클라이언트).
-
-K8s API 접근이 필요한 항목(1.11,1.12,1.13,2.2,3.9)은 mgmt 서버에 이미 구성된 kubeconfig
-컨텍스트(클러스터 이름과 동일하다고 가정, `aws eks update-kubeconfig --name <cluster>`
-로 사전 구성)를 사용한다. 컨텍스트가 없으면 해당 항목만 SKIP 처리하고 나머지는 계속 진행한다.
-"""
+"""1.11~1.13, 2.1~2.3, 3.9, 4.14~4.15 EKS 점검."""
 import json
 import os
 
@@ -13,7 +8,7 @@ from .common import make_result, safe_call
 try:
     from kubernetes import client as k8s_client
     from kubernetes import config as k8s_config
-except ImportError:  # kubernetes 패키지 미설치 환경 대비
+except ImportError:
     k8s_client = None
     k8s_config = None
 
@@ -68,7 +63,6 @@ def _load_rbac_v1(cluster_name):
 
 
 def check_1_11_eks_user_management(eks, cluster_name):
-    # EKS Access Entry(STANDARD 타입만) vs config.EKS_ACCESS_WHITELIST 대조
     if config.EKS_ACCESS_WHITELIST is None:
         return [make_result("1.11", "EKS 사용자 관리", "SKIP",
                              "인가된 EKS 접근 사용자 화이트리스트(config.EKS_ACCESS_WHITELIST) 미확정")]
@@ -83,7 +77,7 @@ def check_1_11_eks_user_management(eks, cluster_name):
             continue
         entry_type = detail.get("accessEntry", {}).get("type", "STANDARD")
         if entry_type != "STANDARD":
-            continue  # 노드용 자동 생성 Access Entry(EC2_LINUX 등) 제외
+            continue
         if principal_arn not in config.EKS_ACCESS_WHITELIST:
             unauthorized.append(principal_arn)
     status = "PASS" if not unauthorized else "FAIL"
@@ -197,7 +191,6 @@ def _attached_policy_names(iam, role_name):
 
 
 def check_2_1_instance_service_policies(eks, iam, ec2, cluster_names):
-    # 워커노드/NAT IAM 역할이 필수 관리형 정책 집합과 정확히 일치해야 함(초과·누락 모두 FAIL)
     required_node = set(config.EKS_WORKER_NODE_REQUIRED_POLICIES)
     required_nat = set(config.NAT_INSTANCE_REQUIRED_POLICIES)
     violations = []
@@ -308,9 +301,6 @@ def _role_granted_actions(iam, role_name):
 
 
 def check_2_2_network_service_policies(iam, cluster_names):
-    # ALB(aws-load-balancer-controller IRSA): 실제 권한이 공식 정책(reference/alb_iam_policy.json)의
-    # 부분집합인지 대조(초과 권한만 FAIL). VPC CNI(aws-node IRSA): ServiceAccount의 IRSA
-    # annotation 실측 여부로 판정(config.VPC_CNI_IRSA_SERVICE_ACCOUNT 참고).
     try:
         official_actions = _load_alb_official_actions()
     except OSError as exc:
@@ -341,7 +331,7 @@ def check_2_2_network_service_policies(iam, cluster_names):
         extra = actual_actions - official_actions
         alb_status = "PASS" if not extra else "FAIL"
         alb_detail = f"[{cluster_name}] ALB IRSA role={role_name} 공식 정책 대비 초과 액션: {_fmt_set(extra)}"
-        break  # 클러스터가 여러 개여도 controller는 보통 1개 클러스터에만 배포됨 — 첫 매칭 대표 판정
+        break
 
     if alb_status is None:
         alb_detail = alb_detail or (
@@ -350,7 +340,6 @@ def check_2_2_network_service_policies(iam, cluster_names):
             "aws-load-balancer-controller ServiceAccount를 찾지 못함(K8s 접근 실패 또는 미배포) — ALB IRSA 대조는 보류"
         )
 
-    # VPC CNI(aws-node) IRSA annotation 실측
     cni_status, cni_detail = None, None
     for cluster_name in cluster_names:
         core_v1, err = _load_core_v1(cluster_name)
@@ -371,13 +360,12 @@ def check_2_2_network_service_policies(iam, cluster_names):
         else:
             cni_status = "REVIEW"
             cni_detail = f"[{cluster_name}] aws-node ServiceAccount에 IRSA role-arn annotation 없음"
-        break  # aws-node는 클러스터당 1개 DaemonSet — 첫 매칭 대표 판정
+        break
 
     if cni_status is None:
         cni_status = "REVIEW"
         cni_detail = cni_detail or config.VPC_CNI_IRSA_NOT_SEPARATED_NOTE
 
-    # 최종 판정: 둘 중 하나라도 FAIL이면 FAIL, 둘 다 PASS면 PASS, 그 외엔 REVIEW.
     if alb_status == "FAIL" or cni_status == "FAIL":
         status = "FAIL"
     elif alb_status == "PASS" and cni_status == "PASS":
@@ -389,9 +377,6 @@ def check_2_2_network_service_policies(iam, cluster_names):
 
 
 def check_2_3_service_policies(iam, cluster_names):
-    # 서비스별 전용 SA(config.SERVICE_IAM_POLICY_MAP.service_accounts)를 각각 조회해서
-    # S3/SecretManager 과잉권한(전원 미보유) + KMS(SERVICE_IAM_KMS_CHECK_ENABLED일 때만,
-    # auth-service만 SERVICE_IAM_KMS_ALLOWED_ACTIONS 보유·나머지는 미보유)를 대조한다.
     if config.SERVICE_IAM_POLICY_MAP is None:
         return [make_result("2.3", "기타 서비스 정책 관리", "SKIP",
                              "서비스별 IAM 정책 매핑(config.SERVICE_IAM_POLICY_MAP) 미확정")]
@@ -459,7 +444,6 @@ def check_2_3_service_policies(iam, cluster_names):
 
 
 def run_all(eks, iam, ec2, cluster_names, discovery_error=None):
-    # 클러스터를 못 찾으면 N/A가 아니라 SKIP(EKS는 이 아키텍처의 핵심 컴퓨트 플랫폼)
     if not cluster_names:
         if discovery_error:
             note = f"EKS 클러스터 조회 자체가 실패함(권한/네트워크 등 확인 필요): {discovery_error}"
@@ -484,9 +468,6 @@ def run_all(eks, iam, ec2, cluster_names, discovery_error=None):
             results += check_4_14_control_plane_logging(eks, cluster_name)
             results += check_4_15_secrets_encryption(eks, cluster_name)
         results += check_2_3_service_policies(iam, cluster_names)
-    # 2.2(VPC CNI REVIEW)는 클러스터 조회 가능 여부와 무관한 정적 확정 사실이 걸려 있어
-    # cluster_names가 비어도 항상 호출한다(check_2_2_network_service_policies 내부에서
-    # ALB 파트만 조건부로 SKIP 취급하고 최종 상태는 최소 REVIEW로 고정).
     results += check_2_2_network_service_policies(iam, cluster_names)
     results += check_2_1_instance_service_policies(eks, iam, ec2, cluster_names)
     return results

@@ -26,9 +26,9 @@ COLUMNS = ["항목ID", "항목명", "판정", "상세", "대상", "점검일시"
 # 실측 태스크로 전환 완료 — 더 이상 여기서 N/A 고정하지 않는다.
 EXCLUDED_SERVER_ITEMS = []
 EXCLUDED_DBMS_ITEMS = [
-    ("D-12", "안전한 리스너 비밀번호 설정"),
-    ("D-13", "불필요한 ODBC/OLE-DB 제거"),
-    ("D-15", "리스너 로그/trace 파일 변경 제한"),
+    ("D-12", "안전한 리스너 비밀번호 설정 및 사용"),
+    ("D-13", "불필요한 ODBC/OLE-DB 데이터 소스와 드라이브를 제거하여 사용"),
+    ("D-15", "관리자 이외의 사용자가 오라클 리스너의 접속을 통해 리스너 로그 및 trace 파일에 대한 변경 제한"),
     ("D-16", "Windows 인증 모드 사용"),
     ("D-19", "OS_ROLES, REMOTE_OS_AUTHENTICATION, REMOTE_OS_ROLES를 FALSE로 설정"),
     ("D-22", "데이터베이스의 자원 제한 기능을 TRUE로 설정"),

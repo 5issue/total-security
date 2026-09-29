@@ -25,26 +25,45 @@ def check_3_1_sg_any(ec2):
     return [make_result("3.1", "보안 그룹 인/아웃바운드 ANY 설정 관리", status, detail)]
 
 
-def check_3_2_sg_unnecessary_rules(ec2):
+def _internet_facing_alb_sg_ids(elbv2):
+    lbs, err = safe_call(elbv2.describe_load_balancers)
+    if err:
+        return None, err
+    return {sg for lb in lbs["LoadBalancers"]
+            if lb.get("Scheme") == "internet-facing" for sg in lb.get("SecurityGroups", [])}, None
+
+
+def check_3_2_sg_unnecessary_rules(ec2, elbv2):
     # [확정 — 2026-09-13 인프라팀 노션 회신] 인바운드는 VPC 내부 대역(SG_ALLOWED_INBOUND_CIDR)
     # 만 전체 허용, 외부 인터넷(0.0.0.0/0) 인바운드는 전면 차단. 아웃바운드의 0.0.0.0/0은
     # 정상이므로 방향(인바운드/아웃바운드) 구분이 필수 — 인바운드만 판정 대상.
+    # [2026-09-28 인프라팀 회신] internet-facing ALB에 붙은 SG는 ALB_PUBLIC_INBOUND_PORTS의
+    # 외부 인바운드를 허용(ALB 동작에 필수). SG ID는 재생성 때 바뀌므로 ALB 연결로 자동 탐지.
+    # ALB 조회가 실패하면 예외 없이 판정(FAIL로 남고 상세에 사유 표시).
     sgs, err = safe_call(ec2.describe_security_groups)
     if err:
         return [make_result("3.2", "보안 그룹 인/아웃바운드 불필요 정책 관리", "SKIP", f"보안그룹 조회 실패: {err}")]
+    alb_sg_ids, alb_err = _internet_facing_alb_sg_ids(elbv2)
+    alb_sg_ids = alb_sg_ids or set()
+    allowed_ports = set(config.ALB_PUBLIC_INBOUND_PORTS)
     offenders = []
     for sg in sgs["SecurityGroups"]:
         for perm in sg["IpPermissions"]:
+            is_alb_port = (sg["GroupId"] in alb_sg_ids and perm.get("IpProtocol") in ("tcp", "6")
+                           and perm.get("FromPort") == perm.get("ToPort") in allowed_ports)
             for r in perm.get("IpRanges", []):
                 cidr = r.get("CidrIp")
-                if cidr and cidr != config.SG_ALLOWED_INBOUND_CIDR:
+                if cidr and cidr != config.SG_ALLOWED_INBOUND_CIDR and not (is_alb_port and cidr == "0.0.0.0/0"):
                     offenders.append(f"{sg['GroupId']}(inbound {cidr})")
             for r in perm.get("Ipv6Ranges", []):
-                if r.get("CidrIpv6"):
+                if r.get("CidrIpv6") and not (is_alb_port and r["CidrIpv6"] == "::/0"):
                     offenders.append(f"{sg['GroupId']}(inbound {r['CidrIpv6']})")
     status = "PASS" if not offenders else "FAIL"
     detail = (f"허용 대역({config.SG_ALLOWED_INBOUND_CIDR}) 외 인바운드 규칙: "
-              + (", ".join(offenders) if offenders else "없음"))
+              + (", ".join(offenders) if offenders else "없음")
+              + (f" / internet-facing ALB SG({', '.join(sorted(alb_sg_ids))})는 TCP {sorted(allowed_ports)} 외부 허용"
+                 if alb_sg_ids else "")
+              + (f" / ALB 조회 실패로 ALB 예외 미적용: {alb_err}" if alb_err else ""))
     return [make_result("3.2", "보안 그룹 인/아웃바운드 불필요 정책 관리", status, detail)]
 
 
@@ -94,23 +113,24 @@ def _subnet_route_table_map(ec2):
     return subnet_to_rt, main_rt_by_vpc
 
 
-def check_3_5_igw_direct_route(ec2):
-    subnets, serr = safe_call(ec2.describe_subnets)
-    if serr:
-        return [make_result("3.5", "인터넷 게이트웨이 연결 관리", "SKIP", f"서브넷 조회 실패: {serr}")]
-    subnet_to_rt, main_rt_by_vpc = _subnet_route_table_map(ec2)
-    offenders = []
-    for subnet in subnets["Subnets"]:
-        if subnet.get("MapPublicIpOnLaunch"):
-            continue  # 퍼블릭 서브넷은 IGW 직접경로가 정상
-        rt = subnet_to_rt.get(subnet["SubnetId"]) or main_rt_by_vpc.get(subnet["VpcId"])
-        if not rt:
-            continue
-        for route in rt["Routes"]:
-            if route.get("DestinationCidrBlock") == "0.0.0.0/0" and str(route.get("GatewayId", "")).startswith("igw-"):
-                offenders.append(f"{subnet['SubnetId']}->{rt['RouteTableId']}")
-    status = "PASS" if not offenders else "FAIL"
-    detail = "프라이빗 서브넷의 IGW 직접경로(절대기준 위반): " + (", ".join(offenders) if offenders else "없음")
+def check_3_5_igw_nat_gateway(ec2):
+    # [2026-09-28 원문(2024 클라우드 가이드 3.5) 재대조] 원문 양호: 인터넷 게이트웨이에 불필요하게 연결된
+    # NAT 게이트웨이가 존재하지 않는 경우. 기존엔 "프라이빗 서브넷의 IGW 직접 경로"를 봤는데 원문 기준이
+    # 아니었음 → 사용 가능한 NAT 게이트웨이 중 어떤 라우팅 테이블도 경유하지 않는(불필요한) 것을 FAIL.
+    # NAT 게이트웨이를 쓰지 않으면(NAT 인스턴스 사용) 불필요한 연결이 없으므로 양호.
+    nat_gws, err = safe_call(ec2.describe_nat_gateways, Filter=[{"Name": "state", "Values": ["available"]}])
+    if err:
+        return [make_result("3.5", "인터넷 게이트웨이 연결 관리", "SKIP", f"NAT 게이트웨이 조회 실패: {err}")]
+    rts, rerr = safe_call(ec2.describe_route_tables)
+    if rerr:
+        return [make_result("3.5", "인터넷 게이트웨이 연결 관리", "SKIP", f"라우팅테이블 조회 실패: {rerr}")]
+    routed = {r.get("NatGatewayId") for rt in rts["RouteTables"] for r in rt["Routes"] if r.get("NatGatewayId")}
+    all_ids = [g["NatGatewayId"] for g in nat_gws["NatGateways"]]
+    unused = [g for g in all_ids if g not in routed]
+    status = "PASS" if not unused else "FAIL"
+    detail = (f"NAT 게이트웨이 {len(all_ids)}개 중 어떤 라우팅 테이블도 경유하지 않는(불필요한) NAT 게이트웨이: "
+              + (", ".join(unused) if unused else "없음")
+              + ("" if all_ids else " (NAT 게이트웨이 미사용)"))
     return [make_result("3.5", "인터넷 게이트웨이 연결 관리", status, detail)]
 
 
@@ -148,6 +168,26 @@ def check_3_6_nat_management(ec2):
         if missing_names:
             offenders.append(f"확정된 NAT 경유지 중 미발견: {', '.join(missing_names)}")
 
+        # [2026-09-28 원문 재대조] 원문 취약: 목적이 확인되지 않은 리소스가 NAT에 연결된 경우 — NAT(인스턴스·
+        # 게이트웨이)로 기본 경로(0.0.0.0/0)를 보내는 서브넷이 확정된 프라이빗 서브넷 대역인지 확인.
+        # 기존엔 allowed_private_subnet_cidrs 값을 두고도 판정에 쓰지 않았음.
+        allowed_cidrs = set(confirmed.get("allowed_private_subnet_cidrs", []))
+        nat_ids = {inst["InstanceId"] for inst in nat_instances}
+        nat_enis = {eni["NetworkInterfaceId"] for inst in nat_instances for eni in inst.get("NetworkInterfaces", [])}
+        subnets, serr = safe_call(ec2.describe_subnets)
+        subnet_to_rt, main_rt_by_vpc = _subnet_route_table_map(ec2)
+        if serr:
+            offenders.append(f"NAT 연결 서브넷 확인 실패: {serr}")
+        else:
+            for subnet in subnets["Subnets"]:
+                rt = subnet_to_rt.get(subnet["SubnetId"]) or main_rt_by_vpc.get(subnet["VpcId"])
+                uses_nat = rt and any(
+                    r.get("DestinationCidrBlock") == "0.0.0.0/0"
+                    and (r.get("InstanceId") in nat_ids or r.get("NetworkInterfaceId") in nat_enis or r.get("NatGatewayId"))
+                    for r in rt["Routes"])
+                if uses_nat and subnet["CidrBlock"] not in allowed_cidrs:
+                    offenders.append(f"목적 미확인 서브넷의 NAT 경유: {subnet['SubnetId']}({subnet['CidrBlock']})")
+
     status = "PASS" if nat_instances and not offenders else ("FAIL" if offenders else "REVIEW")
     detail = (
         f"NAT 인스턴스(Name 태그 'nat' 포함) {len(nat_instances)}대"
@@ -158,12 +198,12 @@ def check_3_6_nat_management(ec2):
     return [make_result("3.6", "NAT 게이트웨이 연결 관리", status, detail)]
 
 
-def run_all(ec2):
+def run_all(ec2, elbv2):
     results = []
     results += check_3_1_sg_any(ec2)
-    results += check_3_2_sg_unnecessary_rules(ec2)
+    results += check_3_2_sg_unnecessary_rules(ec2, elbv2)
     results += check_3_3_nacl(ec2)
     results += check_3_4_route_table(ec2)
-    results += check_3_5_igw_direct_route(ec2)
+    results += check_3_5_igw_nat_gateway(ec2)
     results += check_3_6_nat_management(ec2)
     return results

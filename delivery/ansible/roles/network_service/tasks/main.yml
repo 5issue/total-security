@@ -1,5 +1,5 @@
 ---
-# roles/network_service — 서버 U-34~U-61 계열(불필요 서비스·네트워크 서비스) 점검
+# U-34~U-61, U-65 서비스 관리
 
 # U-34 | Finger 서비스 비활성화
 - name: "U-34 | finger 서비스 상태 조회"
@@ -18,43 +18,47 @@
       'detail': 'finger 서비스 활성 유닛 수: ' ~ (u34_raw.stdout | default('0') | trim)
     }] }}"
 
-# U-35 | 공유 서비스(Samba)에 대한 익명 접근 제한
-- name: "U-35 | smb 서비스 상태 조회"
-  ansible.builtin.shell: "systemctl is-active smb.service 2>/dev/null || echo inactive"
+# U-35 | 공유 서비스에 대한 익명 접근 제한 설정
+- name: "U-35 | 공유 서비스(FTP·NFS·Samba) 익명 접근 설정 조회"
+  ansible.builtin.shell: |
+    active() { [ "$(systemctl is-active "$1" 2>/dev/null)" = "active" ]; }
+    used=""
+    if active vsftpd.service || active proftpd.service; then
+      used="$used FTP"
+      awk -F: '$1=="ftp" || $1=="anonymous" {print "FTP 계정 존재: "$1}' /etc/passwd
+      grep -hiE '^[[:space:]]*anonymous_enable[[:space:]]*=[[:space:]]*yes' /etc/vsftpd.conf /etc/vsftpd/vsftpd.conf 2>/dev/null | sed 's/^/vsftpd: /'
+      grep -hiE '^[[:space:]]*<Anonymous' /etc/proftpd.conf /etc/proftpd/proftpd.conf 2>/dev/null | sed 's/^/proftpd: /'
+    fi
+    if active nfs-server.service; then
+      used="$used NFS"
+      grep -hE 'anonuid|anongid' /etc/exports /etc/exports.d/*.exports 2>/dev/null | sed 's/^/NFS exports: /'
+    fi
+    if active smb.service; then
+      used="$used Samba"
+      grep -hiE 'guest ok[[:space:]]*=[[:space:]]*yes|map to guest' /etc/samba/smb.conf 2>/dev/null | sed 's/^/Samba: /'
+    fi
+    echo "USED:${used:- 없음}"
   args:
     executable: /bin/bash
-  register: u35_smb_active
+  register: u35_raw
   changed_when: false
   failed_when: false
-
-- name: "U-35 | smb.conf 게스트 접근 설정 조회"
-  ansible.builtin.shell: "grep -Ei 'guest ok\\s*=\\s*yes|map to guest' /etc/samba/smb.conf 2>/dev/null"
-  args:
-    executable: /bin/bash
-  register: u35_guest_raw
-  changed_when: false
-  failed_when: false
-  when: (u35_smb_active.stdout | default('') | trim) == 'active'
 
 - name: "U-35 | 판정 기록"
   vars:
-    u35_smb_is_active: "{{ (u35_smb_active.stdout | default('') | trim) == 'active' }}"
+    u35_used: "{{ (u35_raw.stdout_lines | default([]) | select('match', '^USED:') | first | default('USED: 없음'))[5:] | trim }}"
+    u35_findings: "{{ u35_raw.stdout_lines | default([]) | reject('match', '^USED:') | list }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-35', 'item': '공유 서비스 익명 접근 제한',
-      'status': (
-        'PASS' if not u35_smb_is_active else
-        ('FAIL' if (u35_guest_raw.stdout | default('') | length > 0) else 'PASS')
-      ),
-      'detail': (
-        'Samba(smb) 미사용(양호)' if not u35_smb_is_active
-        else ('게스트 접근 허용 설정 발견: ' ~ u35_guest_raw.stdout if u35_guest_raw.stdout | default('') | length > 0 else 'guest ok 미설정(양호)')
-      )
+      'id': 'U-35', 'item': '공유 서비스에 대한 익명 접근 제한 설정',
+      'status': 'PASS' if u35_findings | length == 0 else 'FAIL',
+      'detail': ('공유 서비스(FTP·NFS·Samba) 미사용' if u35_used == '없음'
+                 else '사용 중인 공유 서비스: ' ~ u35_used ~ ' / 익명 접근 설정: ' ~ (u35_findings | join('; ') if u35_findings | length > 0 else '없음'))
     }] }}"
 
-# U-36 | r 계열 서비스(rlogin/rsh/rexec) 비활성화
+# U-36 | r 계열 서비스 비활성화
 - name: "U-36 | r계열 서비스 상태 조회"
-  ansible.builtin.shell: "systemctl is-active rlogin.socket rsh.socket rexec.socket 2>/dev/null | grep -c '^active' || true"
+  ansible.builtin.shell: "systemctl is-active rlogin.socket rsh.socket rexec.socket rsyncd.service rsyncd.socket 2>/dev/null | grep -c '^active' || true"
   args:
     executable: /bin/bash
   register: u36_raw
@@ -66,11 +70,10 @@
     check_results: "{{ check_results + [{
       'id': 'U-36', 'item': 'r 계열 서비스 비활성화',
       'status': 'PASS' if (u36_raw.stdout | default('0') | trim == '0') else 'FAIL',
-      'detail': 'r계열(rlogin/rsh/rexec) 활성 유닛 수: ' ~ (u36_raw.stdout | default('0') | trim)
+      'detail': 'r계열(rlogin/rsh/rexec/rsync) 활성 유닛 수: ' ~ (u36_raw.stdout | default('0') | trim)
     }] }}"
 
-# U-37 | crontab 설정파일 권한 설정 (원문은 crontab+at 두 서비스 모두 요구 — 명령어
-# SUID/world-execute + cron/at 관련 파일 640 이하 두 갈래로 확인)
+# U-37 | crontab 설정파일 권한 설정 미흡
 - name: "U-37 | crontab/at 명령어 SUID·world-execute 여부 조회"
   ansible.builtin.shell: "set -o pipefail && find /usr/bin/crontab /usr/bin/at -maxdepth 0 -type f \\( -perm -4000 -o -perm -0001 \\) 2>/dev/null"
   args:
@@ -105,14 +108,14 @@
     u37_file_violations: "{{ u37_file_raw.stdout_lines | default([]) }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-37', 'item': 'crontab 설정파일 권한 설정',
+      'id': 'U-37', 'item': 'crontab 설정파일 권한 설정 미흡',
       'status': 'PASS' if (u37_cmd_violations | length == 0 and u37_file_violations | length == 0) else 'FAIL',
       'detail': '명령어 SUID/world-execute 위반: ' ~ (u37_cmd_violations | join(', ') if u37_cmd_violations | length > 0 else '없음') ~
                 ' / 파일 권한(기준 <= ' ~ u37_crontab_perm_max ~ ') 위반: ' ~ (u37_file_violations | join(', ') if u37_file_violations | length > 0 else '없음') ~
                 ' | cron.allow/deny·at.allow/deny 존재: ' ~ (u37_allow_raw.stdout_lines | default([]) | join(', ') if u37_allow_raw.stdout_lines | default([]) | length > 0 else '없음(둘 다 없으면 root만 등록 가능 — 안전한 기본값, 원문 참고사항)')
     }] }}"
 
-# U-38 | DoS 공격에 취약한 서비스 비활성화 (echo/discard/daytime/chargen)
+# U-38 | DoS 공격에 취약한 서비스 비활성화
 - name: "U-38 | DoS 취약 서비스 상태 조회"
   ansible.builtin.shell: >
     systemctl is-active echo.socket echo-udp.socket discard.socket discard-udp.socket
@@ -152,7 +155,7 @@
       'detail': 'nfs-server: ' ~ (u39_raw.stdout | trim)
     }] }}"
 
-# U-40 | NFS 접근 통제 [기준값필요: u40_nfs_allowed_hosts, NFS 비활성 시 N/A]
+# U-40 | NFS 접근 통제
 - name: "U-40 | /etc/exports 조회"
   ansible.builtin.command: cat /etc/exports
   register: u40_exports_raw
@@ -205,7 +208,7 @@
       'detail': 'autofs: ' ~ (u41_raw.stdout | trim)
     }] }}"
 
-# U-42 | 불필요한 RPC 서비스 비활성화 [확정 기준값: group_vars/all.yml]
+# U-42 | 불필요한 RPC 서비스 비활성화
 - name: "U-42 | RPC 서비스별 상태 조회"
   ansible.builtin.shell: "systemctl is-active {{ item }} 2>/dev/null || echo inactive"
   args:
@@ -259,7 +262,7 @@
       'detail': 'tftp/talk/ntalk 활성 유닛 수: ' ~ (u44_raw.stdout | default('0') | trim)
     }] }}"
 
-# U-45 | 메일 서비스 버전 점검 [기준값필요: u45_mail_latest_version, 미사용시 N/A]
+# U-45 | 메일 서비스 버전 점검
 - name: "U-45 | 메일 서비스 상태 조회"
   ansible.builtin.shell: "systemctl is-active postfix.service sendmail.service 2>/dev/null | grep -c '^active' || true"
   args:
@@ -303,7 +306,7 @@
       )
     }] }}"
 
-# U-47 | 스팸 메일 릴레이 제한 [기준값필요: u47_relay_allowed_list, 미사용시 N/A]
+# U-47 | 스팸 메일 릴레이 제한
 - name: "U-47 | mynetworks 설정 조회"
   ansible.builtin.command: postconf mynetworks
   register: u47_raw
@@ -349,7 +352,7 @@
       )
     }] }}"
 
-# U-49 | DNS 보안 버전 패치 [기준값필요: u49_dns_patch_baseline, 미사용시 N/A]
+# U-49 | DNS 보안 버전 패치
 - name: "U-49 | named(bind) 상태 조회"
   ansible.builtin.shell: "systemctl is-active named.service 2>/dev/null | grep -c '^active' || true"
   args:
@@ -381,7 +384,7 @@
       )
     }] }}"
 
-# U-50 | DNS Zone Transfer 설정 [기준값필요: u50_dns_allowed_secondaries, 미사용시 N/A]
+# U-50 | DNS ZoneTransfer 설정
 - name: "U-50 | allow-transfer 설정 조회"
   ansible.builtin.shell: "grep -A2 'allow-transfer' /etc/named.conf 2>/dev/null"
   args:
@@ -396,7 +399,7 @@
     u50_content: "{{ u50_raw.stdout | default('') }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-50', 'item': 'DNS Zone Transfer 설정',
+      'id': 'U-50', 'item': 'DNS ZoneTransfer 설정',
       'status': (
         'N/A' if (u49_active_raw.stdout | default('0') | trim) == '0' else
         ('FAIL' if (u50_content | length == 0 or 'any' in u50_content) else
@@ -408,7 +411,7 @@
       )
     }] }}"
 
-# U-51 | DNS 서비스의 취약한 동적 업데이트 설정 금지 [기준값필요: u51_dns_dynamic_update_allowed]
+# U-51 | DNS 서비스의 취약한 동적 업데이트 설정 금지
 - name: "U-51 | allow-update 설정 조회"
   ansible.builtin.shell: "grep -A2 'allow-update' /etc/named.conf 2>/dev/null"
   args:
@@ -423,7 +426,7 @@
     u51_content: "{{ u51_raw.stdout | default('') }}"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-51', 'item': 'DNS 동적 업데이트 설정 금지',
+      'id': 'U-51', 'item': 'DNS 서비스의 취약한 동적 업데이트 설정 금지',
       'status': (
         'N/A' if (u49_active_raw.stdout | default('0') | trim) == '0' else
         ('PASS' if u51_content | length == 0 else
@@ -455,7 +458,7 @@
       'detail': 'telnet.socket: ' ~ (u52_raw.stdout | trim)
     }] }}"
 
-# U-53 | FTP 서비스 정보 노출 제한 (vsftpd 배너)
+# U-53 | FTP 서비스 정보 노출 제한
 - name: "U-53 | vsftpd 상태 조회"
   ansible.builtin.shell: "systemctl is-active vsftpd.service 2>/dev/null | grep -c '^active' || true"
   args:
@@ -487,7 +490,7 @@
       )
     }] }}"
 
-# U-54 | 암호화되지 않은 FTP 서비스 비활성화 (SSL 강제)
+# U-54 | 암호화되지 않는 FTP 서비스 비활성화
 - name: "U-54 | vsftpd SSL 설정 조회"
   ansible.builtin.shell: "grep -Ei '^\\s*ssl_enable' /etc/vsftpd/vsftpd.conf 2>/dev/null"
   args:
@@ -500,7 +503,7 @@
 - name: "U-54 | 판정 기록"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-54', 'item': '암호화되지 않은 FTP 서비스 비활성화',
+      'id': 'U-54', 'item': '암호화되지 않는 FTP 서비스 비활성화',
       'status': (
         'N/A' if (u53_active_raw.stdout | default('0') | trim) == '0' else
         ('PASS' if 'YES' in (u54_raw.stdout | default('') | upper) else 'FAIL')
@@ -511,7 +514,7 @@
       )
     }] }}"
 
-# U-55 | FTP 계정 Shell 제한
+# U-55 | FTP 계정 shell 제한
 - name: "U-55 | ftp 계정 shell 조회"
   ansible.builtin.shell: "getent passwd ftp"
   register: u55_raw
@@ -521,7 +524,7 @@
 - name: "U-55 | 판정 기록"
   ansible.builtin.set_fact:
     check_results: "{{ check_results + [{
-      'id': 'U-55', 'item': 'FTP 계정 Shell 제한',
+      'id': 'U-55', 'item': 'FTP 계정 shell 제한',
       'status': (
         'N/A' if u55_raw.rc != 0 else
         ('PASS' if (u55_raw.stdout is search('nologin|/bin/false')) else 'FAIL')
@@ -529,7 +532,7 @@
       'detail': 'ftp 계정 없음(해당없음)' if u55_raw.rc != 0 else u55_raw.stdout
     }] }}"
 
-# U-56 | FTP 서비스 접근 제어 설정 [기준값필요: u56_ftp_allowed_hosts, 미사용시 N/A]
+# U-56 | FTP 서비스 접근 제어 설정
 - name: "U-56 | tcp_wrappers vsftpd 설정 조회"
   ansible.builtin.shell: "grep -h vsftpd /etc/hosts.allow /etc/hosts.deny 2>/dev/null"
   args:
@@ -555,7 +558,7 @@
       )
     }] }}"
 
-# U-57 | Ftpusers 파일 설정 (root 접속 차단)
+# U-57 | Ftpusers 파일 설정
 - name: "U-57 | ftpusers 파일 조회"
   ansible.builtin.shell: "cat /etc/vsftpd/ftpusers /etc/vsftpd.ftpusers /etc/ftpusers 2>/dev/null"
   args:
@@ -599,7 +602,7 @@
       )
     }] }}"
 
-# U-59 | 안전한 SNMP 버전 사용 (v3 이상)
+# U-59 | 안전한 SNMP 버전 사용
 - name: "U-59 | snmpd.conf v1/v2c 설정 조회"
   ansible.builtin.shell: "grep -Ei '^\\s*(rocommunity|rwcommunity)\\b' /etc/snmp/snmpd.conf 2>/dev/null"
   args:
@@ -642,7 +645,7 @@
       )
     }] }}"
 
-# U-61 | SNMP Access Control 설정 [기준값필요: u61_snmp_allowed_hosts, 미사용시 N/A]
+# U-61 | SNMP Access Control 설정
 - name: "U-61 | snmpd.conf com2sec 설정 조회"
   ansible.builtin.shell: "grep -Ei '^\\s*com2sec\\b' /etc/snmp/snmpd.conf 2>/dev/null"
   args:
@@ -669,7 +672,7 @@
       )
     }] }}"
 
-# U-65 | NTP 및 시각 동기화 설정 (Amazon Time Sync — `chronyc -n sources`로 조회)
+# U-65 | NTP 및 시각 동기화 설정
 - name: "U-65 | chrony 활성 소스 조회(chronyc)"
   ansible.builtin.shell: "set -o pipefail && chronyc -n sources 2>/dev/null | tail -n +3 | awk '{print $2}'"
   args:
