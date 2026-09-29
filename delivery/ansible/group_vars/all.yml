@@ -75,6 +75,7 @@ u23_allowed_suid_sgid:
   - /usr/libexec/utempter/utempter
 u15_unowned_exclude_dirs:
   - /var/lib/containerd
+  - /var/lib/kubelet
 u23_suid_exclude_dirs:
   - /var/lib/containerd
 
@@ -106,6 +107,8 @@ u25_world_writable_exclude_dirs:
 u26_dev_exclude_dirs:
   - mqueue
   - shm
+u26_dev_allowed_files:
+  - /dev/termination-log
 
 # U-28 : 접속 IP 및 포트 제한
 
@@ -166,6 +169,9 @@ u33_hidden_allowed_paths:
   - "/tmp/.XIM-unix"
   - "/tmp/.Test-unix"
   - "/var/log/journal/*/.#*journal*"
+  - "/var/cache/dnf/.gpgkeyschecked.yum"
+  - "/etc/cni/net.d/.cni-concurrency.lock"
+  - "/usr/local/aws-cli/v2/*/dist/awscli/botocore/.changes"
 
 # U-40 : NFS 접근 통제
 u40_nfs_allowed_hosts: null

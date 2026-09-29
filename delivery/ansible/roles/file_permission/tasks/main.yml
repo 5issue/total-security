@@ -277,6 +277,7 @@
     set -o pipefail &&
     find /dev -type f 2>/dev/null
     | grep -v -E '^/dev/({{ u26_dev_exclude_dirs | join('|') }})/'
+    | grep -v -x -F -e {{ u26_dev_allowed_files | map('quote') | join(' -e ') }}
     | sort
   args:
     executable: /bin/bash
@@ -289,7 +290,7 @@
     check_results: "{{ check_results + [{
       'id': 'U-26', 'item': '/dev에 존재하지 않는 device 파일 점검',
       'status': 'PASS' if (u26_raw.stdout | default('') | length == 0) else 'FAIL',
-      'detail': '/dev 내 device가 아닌 일반 파일(' ~ (u26_dev_exclude_dirs | join('·')) ~ ' 제외): '
+      'detail': '/dev 내 device가 아닌 일반 파일(' ~ (u26_dev_exclude_dirs | join('·')) ~ ' 제외, 허용: ' ~ (u26_dev_allowed_files | join('·')) ~ '): '
                 ~ ((u26_raw.stdout_lines | default([])) | join(', ') if u26_raw.stdout | default('') | length > 0 else '없음')
     }] }}"
 
