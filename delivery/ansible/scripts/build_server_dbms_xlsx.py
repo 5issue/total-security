@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""Ansible 점검 결과(JSON, ./results/*.json)를 server_dbms_result.xlsx로 변환한다.
-
-실행 예시:
-    python3 build_server_dbms_xlsx.py --round "1차"
-
-입력: site_check.yml 이 ./results/ 에 저장한
-    - {inventory_hostname}_{날짜}.json  (서버, 'host' 키 존재)
-    - dbms_{날짜}.json                   (DBMS, 'host' 키 없음)
-    - auth_authz_{날짜}.json             (인증_인가 중 K8s 기반 AUTHZ-08/09, SVC-01)
-출력: server_dbms_result.xlsx (시트: 서버, DBMS, 인증_인가)
-"""
+"""서버·DBMS 점검 결과 JSON을 server_dbms_result.xlsx로 변환."""
 import argparse
 import json
 import sys
@@ -20,13 +10,12 @@ from openpyxl import Workbook
 
 COLUMNS = ["항목ID", "항목명", "판정", "상세", "대상", "점검일시", "회차"]
 
-# 판정유형 "제외" 확정 항목 — 코드로 조회하지 않고 N/A 고정 행으로 삽입한다.
-# U-62는 실측 태스크로 전환 완료(file_permission role) — 더 이상 여기서 N/A 고정 안 함.
+# N/A 고정 항목
 EXCLUDED_SERVER_ITEMS = []
 EXCLUDED_DBMS_ITEMS = [
-    ("D-12", "안전한 리스너 비밀번호 설정"),
-    ("D-13", "불필요한 ODBC/OLE-DB 제거"),
-    ("D-15", "리스너 로그/trace 파일 변경 제한"),
+    ("D-12", "안전한 리스너 비밀번호 설정 및 사용"),
+    ("D-13", "불필요한 ODBC/OLE-DB 데이터 소스와 드라이브를 제거하여 사용"),
+    ("D-15", "관리자 이외의 사용자가 오라클 리스너의 접속을 통해 리스너 로그 및 trace 파일에 대한 변경 제한"),
     ("D-16", "Windows 인증 모드 사용"),
     ("D-19", "OS_ROLES, REMOTE_OS_AUTHENTICATION, REMOTE_OS_ROLES를 FALSE로 설정"),
     ("D-22", "데이터베이스의 자원 제한 기능을 TRUE로 설정"),
@@ -72,9 +61,6 @@ def load_result_files(results_dir: Path):
 
 
 def build_server_rows(server_files, round_filter):
-    # results 디렉터리에 여러 회차 실행분(crontab 정기점검 등)의 JSON이 계속 쌓이므로,
-    # 같은 회차 안에서는 호스트별로 checked_at이 가장 최신인 파일 하나만 사용한다
-    # (아니면 같은 항목이 실행 횟수만큼 중복 집계됨).
     filtered = [(p, d) for p, d in server_files if not round_filter or d.get("round") == round_filter]
     latest_by_host = {}
     for path, data in filtered:
@@ -94,8 +80,6 @@ def build_server_rows(server_files, round_filter):
 
 
 def build_dbms_rows(dbms_files, round_filter):
-    # DBMS 결과는 호스트 구분이 없는 파일 하나(실행마다 전체 dbms_connections를 담음)이므로,
-    # 같은 회차 안에서는 checked_at이 가장 최신인 파일 하나만 사용한다.
     filtered = [(p, d) for p, d in dbms_files if not round_filter or d.get("round") == round_filter]
     if not filtered:
         return []
@@ -116,7 +100,6 @@ def append_excluded_rows(rows, items, round_label, checked_at):
 
 
 def _item_id_sort_key(item_id):
-    # "U-07" -> 7, "D-25" -> 25 (분류표 번호순 정렬용, 문자열 정렬 시 U-1 뒤에 U-10이 오는 문제 방지)
     try:
         return int(item_id.split("-")[1])
     except (IndexError, ValueError):
@@ -124,7 +107,6 @@ def _item_id_sort_key(item_id):
 
 
 def sort_rows(rows):
-    # 대상(호스트/서비스)별로 묶은 다음, 그 안에서 항목ID 번호순으로 정렬한다.
     rows.sort(key=lambda r: (r[4], _item_id_sort_key(r[0])))
 
 
@@ -147,7 +129,7 @@ def main():
 
     server_rows = build_server_rows(server_files, args.round_)
     dbms_rows = build_dbms_rows(dbms_files, args.round_)
-    auth_rows = build_dbms_rows(auth_files, args.round_)  # auth_authz_*.json도 dbms와 동일한 구조(호스트 구분 없음)
+    auth_rows = build_dbms_rows(auth_files, args.round_)
     append_excluded_rows(server_rows, EXCLUDED_SERVER_ITEMS, round_label, now_iso)
     append_excluded_rows(dbms_rows, EXCLUDED_DBMS_ITEMS, round_label, now_iso)
     sort_rows(server_rows)

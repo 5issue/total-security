@@ -14,7 +14,7 @@
   ansible.builtin.set_fact:
     "{{ item }}": {}
   loop: [d01_raw, d02_raw, d03_user_raw, d03_policy_raw, d03_ext_raw, d04_raw, d05_raw, d06_raw,
-         d08_raw, d09_version_raw, d09_raw, d11_raw, d17_raw, d18_raw, d20_raw, d21_raw]
+         d08_raw, d09_version_raw, d09_raw, d11_raw, d18_raw, d20_raw, d21_raw, d25_version_raw, d26_raw]
 
 - name: "{{ db_conn.service }} | 쿼리 실행 대상 DB 파드 조회"
   kubernetes.core.k8s_info:

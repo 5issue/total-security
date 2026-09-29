@@ -16,9 +16,8 @@ u51_dns_dynamic_update_allowed: []
 u56_ftp_allowed_hosts: ["10.0.0.0/16"]
 u61_snmp_allowed_hosts: ["10.0.0.0/16"]
 u65_ntp_allowed_servers: ["169.254.169.123"]
-u26_dev_baseline_snapshot: []   # 파일럿 VM에서 `ls /dev` 실행 후 채우는 것을 권장(테스트 시엔 빈 값 유지 가능)
-# u31/u33 — 2026-09-13부로 N/A 확정(화이트리스트 개념 자체가 없어짐), 실제 값은
-# all.yml의 u31_os_baseline_hidden_entries/u33_business_file_dirs 확정값을 그대로 사용.
+# u09/u33 — 2026-09-28 원문 기준 재작성, 실제 값은 all.yml의 u09_allowed_empty_groups/
+# u33_hidden_allowed_paths/u33_hidden_exclude_dirs를 그대로 사용.
 
 d02_unnecessary_account_whitelist: []
 d03_password_max_days: 90
@@ -30,13 +29,6 @@ d20_admin_owner_whitelist: ["postgres"]
 # d06 — 2026-09-13부로 dbms_service_accounts 매핑 기반으로 재설계됨(regex 패턴 방식 폐기),
 # 아래 dbms_service_accounts 테스트 override 참고.
 
-# U-66/D-26 — 2026-09-10 재분류(제외→자동판정가능(부분)) 로직 검증용 테스트값.
-# u66는 2026-09-13부로 기본값이 "미구현 확정 → 즉시 FAIL"이라, 로컬 테스트에서 실제
-# CloudWatch 로그그룹 조회 분기("로그그룹 없음→FAIL")를 확인하려면 missing_log_categories를
-# 비워서 log_retention_check.yml 경로를 타도록 해야 한다.
-u66_missing_log_categories: []
-u66_log_group_name: "/test/infracheck/sudo-session"
-d26_audit_log_group_name: "/test/infracheck/dbms-audit"
 
 # U-64 — 2026-09-13부로 all.yml에 실제 확정값이 들어가서 여기 별도 override 불필요(제거함).
 # ⚠ 로컬 Vagrant VM은 실제 EC2가 아니라 ec2_metadata_facts 조회 자체가 실패하므로

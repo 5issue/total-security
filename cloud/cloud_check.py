@@ -25,9 +25,7 @@ COLUMNS = ["항목ID", "항목명", "판정", "상세", "대상", "점검일시"
 
 # 판정유형 "제외" 확정 항목 — 코드로 조회하지 않고 N/A 고정 행으로 삽입한다.
 # (1.1/1.2/1.7/3.10은 2026-09-10 재분류로 제외 해제 — iam_checks/elb_checks에서 코드화됨)
-EXCLUDED_ITEMS = [
-    ("4.13", "백업 사용 여부"),
-]
+EXCLUDED_ITEMS = []   # 4.13은 2026-09-28 N/A 해제(원문 재대조 — storage_checks.check_4_13_backup_policy)
 EXCLUDED_DETAIL = "정책/해당없음 확정 항목 — 자동화 스코프 제외(가이드 별도 전달)"
 
 
@@ -94,19 +92,22 @@ def main():
     s3control = session.client("s3control")
     rds = session.client("rds")
     elbv2 = session.client("elbv2")
+    elb = session.client("elb")  # 3.10 Classic LB 존재 여부 확인용
     wafv2 = session.client("wafv2")
     logs = session.client("logs")
     cloudtrail = session.client("cloudtrail")
     eks = session.client("eks")
     awsconfig = session.client("config")  # 1.8 Access Key 사용주기 Config Rule 조회용
     ssm = session.client("ssm")  # SVC-08 세션 로깅 설정 조회용
+    backup = session.client("backup")  # 4.13 AWS Backup 백업 계획 조회용
+    dlm = session.client("dlm")  # 4.13 EBS 스냅샷 수명주기 정책 조회용
 
     results = []
     results += iam_checks.run_all(iam, ec2, awsconfig)
-    results += network_checks.run_all(ec2)
-    results += storage_checks.run_all(ec2, s3, s3control, rds, account_id, cloudtrail, elbv2, ssm, awsconfig)
+    results += network_checks.run_all(ec2, elbv2)
+    results += storage_checks.run_all(ec2, s3, s3control, rds, account_id, cloudtrail, elbv2, ssm, awsconfig, backup, dlm, logs)
     results += logging_checks.run_all(elbv2, logs, ec2, cloudtrail)
-    results += elb_checks.run_all(elbv2, ec2, wafv2)
+    results += elb_checks.run_all(elbv2, elb, wafv2)
 
     cluster_names, discovery_error = discover_eks_clusters(eks, args.eks_clusters)
     results += eks_checks.run_all(eks, iam, ec2, cluster_names, discovery_error)
@@ -116,7 +117,7 @@ def main():
 
     # 인증_인가(SVC-02/AUTHN-14/SVC-08) — 항목ID가 "1.1" 같은 점(.) 구분 숫자가 아니라
     # 별도 시트("인증_인가")에 따로 쓴다(아래 숫자 정렬 키가 못 씀).
-    auth_results = auth_checks.run_all(eks, ec2, ssm, elbv2, cluster_names)
+    auth_results = auth_checks.run_all(eks, ec2, ssm, elbv2, cluster_names, iam)
 
     now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
     rows = [[r["id"], r["item"], r["status"], r["detail"], r["target"], now_iso, args.round_] for r in results]

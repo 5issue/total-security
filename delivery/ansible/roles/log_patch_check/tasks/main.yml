@@ -1,5 +1,5 @@
 ---
-# roles/log_patch_check — U-64(주기적 보안 패치), U-66(시스템 로깅) 점검
+# U-64, U-66 패치 및 로그 관리
 
 - name: "U-64 | 호스트 그룹별 비교 대상 AMI SSM 파라미터 결정"
   ansible.builtin.set_fact:

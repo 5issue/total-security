@@ -1,7 +1,4 @@
-"""SVC-02, AUTHN-14, SVC-08 — 인증_인가 시트 중 AWS CLI/boto3로 조회 가능한 항목.
-
-AUTHZ-08/AUTHZ-09/SVC-01은 ansible/roles/auth_authz에 별도 구현되어 있다.
-"""
+"""SVC-02, AUTHN-14, SVC-08 인증_인가 점검."""
 import json
 import re
 
@@ -10,7 +7,6 @@ from .common import make_result, safe_call
 
 
 def _parse_addon_version(version_str):
-    """'v1.16.0-eksbuild.1' 같은 EKS addon 버전 문자열에서 (major, minor) 추출."""
     m = re.search(r"(\d+)\.(\d+)", version_str or "")
     if not m:
         return None
@@ -18,7 +14,6 @@ def _parse_addon_version(version_str):
 
 
 def check_svc_02_vpc_cni(eks, cluster_names):
-    """vpc-cni >= 1.14, enableNetworkPolicy = true."""
     item = "VPC CNI 1.14+ · enableNetworkPolicy 네이티브 적용"
     if not cluster_names:
         return [make_result("SVC-02", item, "SKIP", "EKS 클러스터 조회 결과 없음 — 클러스터 확인 필요")]
@@ -53,8 +48,6 @@ def check_svc_02_vpc_cni(eks, cluster_names):
 
 
 def check_authn_14_tls_enforced(elbv2):
-    """ALB에 평문(HTTP) 트래픽을 실제로 처리하는 리스너가 없어야 함
-    (80번이 없거나 443 리다이렉트 전용이면 PASS)."""
     item = "전 구간 TLS/HTTPS 강제(엣지 종료)"
     lbs, err = safe_call(elbv2.describe_load_balancers)
     if err:
@@ -64,6 +57,7 @@ def check_authn_14_tls_enforced(elbv2):
     for lb in lbs["LoadBalancers"]:
         listeners_res, lerr = safe_call(elbv2.describe_listeners, LoadBalancerArn=lb["LoadBalancerArn"])
         if lerr:
+            plaintext.append(f"{lb['LoadBalancerName']}(리스너 조회 실패: {lerr})")
             continue
         for listener in listeners_res["Listeners"]:
             if listener["Protocol"] != "HTTP":
@@ -82,9 +76,7 @@ def check_authn_14_tls_enforced(elbv2):
     return [make_result("AUTHN-14", item, status, detail)]
 
 
-def check_svc_08_ssm_bastion(ec2, ssm):
-    """SG 22번 인바운드 차단·SSM 세션로그 연동 자동확인. MFA는 1.9와 중복되어
-    config.SVC08_MFA_CROSS_CHECK_DONE 확정 전까지 REVIEW로 판정."""
+def check_svc_08_ssm_bastion(ec2, ssm, iam):
     item = "운영관리자 SSM 접근·Bastion/SSH 미노출·MFA·세션로그"
 
     sgs, err = safe_call(ec2.describe_security_groups)
@@ -115,25 +107,43 @@ def check_svc_08_ssm_bastion(ec2, ssm):
         except (TypeError, ValueError, KeyError):
             session_log_configured = False
 
-    if ssh_offenders or (not session_log_configured):
+    no_mfa, sim_errors, excepted = [], [], []
+    users, uerr = safe_call(iam.list_users)
+    if uerr:
+        sim_errors.append(f"IAM 사용자 조회 실패: {uerr}")
+    for u in ([] if uerr else users["Users"]):
+        if u["UserName"] in config.SVC08_MFA_EXCEPTIONS:
+            excepted.append(u["UserName"])
+            continue
+        sim, serr = safe_call(
+            iam.simulate_principal_policy, PolicySourceArn=u["Arn"], ActionNames=["ssm:StartSession"],
+            ContextEntries=[{"ContextKeyName": "aws:MultiFactorAuthPresent",
+                             "ContextKeyValues": ["false"], "ContextKeyType": "boolean"}])
+        if serr:
+            sim_errors.append(f"{u['UserName']}({serr})")
+        elif any(r.get("EvalDecision") == "allowed" for r in sim["EvaluationResults"]):
+            no_mfa.append(u["UserName"])
+
+    if ssh_offenders or (not session_log_configured) or no_mfa:
         status = "FAIL"
-    elif config.SVC08_MFA_CROSS_CHECK_DONE:
-        status = "PASS"
-    else:
+    elif sim_errors:
         status = "REVIEW"
+    else:
+        status = "PASS"
 
     detail = (
         f"22번 포트 공개 SG: {', '.join(ssh_offenders) if ssh_offenders else '없음'} / "
         f"SSM 세션로그 CloudWatch·S3 연동: {session_log_note} / "
-        f"MFA 강제 여부는 클라우드 1.9(MFA 설정) 판정과 중복되어 별도 확인 후 반영 예정"
-        f"(config.SVC08_MFA_CROSS_CHECK_DONE={config.SVC08_MFA_CROSS_CHECK_DONE})"
+        f"MFA 없이 SSM 세션 시작(ssm:StartSession)이 허용되는 IAM 사용자: {', '.join(no_mfa) if no_mfa else '없음'}"
+        + (f" (자동화 계정 제외: {', '.join(excepted)})" if excepted else "")
+        + (f" / MFA 확인 실패: {', '.join(sim_errors)}" if sim_errors else "")
     )
     return [make_result("SVC-08", item, status, detail)]
 
 
-def run_all(eks, ec2, ssm, elbv2, cluster_names):
+def run_all(eks, ec2, ssm, elbv2, cluster_names, iam):
     results = []
     results += check_svc_02_vpc_cni(eks, cluster_names)
     results += check_authn_14_tls_enforced(elbv2)
-    results += check_svc_08_ssm_bastion(ec2, ssm)
+    results += check_svc_08_ssm_bastion(ec2, ssm, iam)
     return results

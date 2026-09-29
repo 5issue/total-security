@@ -66,6 +66,8 @@ def check_authn_14_tls_enforced(elbv2):
     for lb in lbs["LoadBalancers"]:
         listeners_res, lerr = safe_call(elbv2.describe_listeners, LoadBalancerArn=lb["LoadBalancerArn"])
         if lerr:
+            # [2026-09-28] 기존엔 조회 실패 시 건너뛰어 PASS가 될 수 있었음 → 확인 불가로 FAIL 처리
+            plaintext.append(f"{lb['LoadBalancerName']}(리스너 조회 실패: {lerr})")
             continue
         for listener in listeners_res["Listeners"]:
             if listener["Protocol"] != "HTTP":
@@ -84,11 +86,8 @@ def check_authn_14_tls_enforced(elbv2):
     return [make_result("AUTHN-14", item, status, detail)]
 
 
-def check_svc_08_ssm_bastion(ec2, ssm):
-    """[기준값필요] SG 22번 인바운드 차단·SSM 세션로그 연동은 자동확인 가능하지만,
-    IAM MFA 강제 여부는 클라우드 1.9(MFA 설정)와 판정이 겹쳐 중복 방지를 위해
-    이 항목에서는 최종 PASS를 주지 않고(SG/세션로그 문제 있으면 FAIL, 없으면 REVIEW)
-    담당 정리가 끝나면 config.SVC08_MFA_CROSS_CHECK_DONE을 True로 바꿔 반영한다."""
+def check_svc_08_ssm_bastion(ec2, ssm, iam):
+    """SG 22번 인바운드 차단·SSM 세션로그 연동·SSM 접근 IAM 사용자 MFA 강제를 확인."""
     item = "운영관리자 SSM 접근·Bastion/SSH 미노출·MFA·세션로그"
 
     sgs, err = safe_call(ec2.describe_security_groups)
@@ -119,25 +118,48 @@ def check_svc_08_ssm_bastion(ec2, ssm):
         except (TypeError, ValueError, KeyError):
             session_log_configured = False
 
-    if ssh_offenders or (not session_log_configured):
+    # [2026-09-28 축소실행본 판정 기준("MFA·감사로그 충족") 재대조] 기존엔 MFA를 판정하지 않아 항상 REVIEW였음.
+    # 1.9는 콘솔 로그인 MFA만 보므로 부족 → IAM 사용자별로 "MFA 없이(aws:MultiFactorAuthPresent=false)
+    # ssm:StartSession이 허용되는지" 정책 시뮬레이션으로 직접 확인. 자동화 계정(점검 스크립트의 SSM 연결 등)은
+    # 운영 관리자가 아니라 MFA를 쓸 수 없어 config.SVC08_MFA_EXCEPTIONS로 제외(상세에 표시).
+    # 한계: IAM 사용자가 Role을 맡아(AssumeRole) SSM에 접속하는 경로는 Role 신뢰정책까지 보지 않음.
+    no_mfa, sim_errors, excepted = [], [], []
+    users, uerr = safe_call(iam.list_users)
+    if uerr:
+        sim_errors.append(f"IAM 사용자 조회 실패: {uerr}")
+    for u in ([] if uerr else users["Users"]):
+        if u["UserName"] in config.SVC08_MFA_EXCEPTIONS:
+            excepted.append(u["UserName"])
+            continue
+        sim, serr = safe_call(
+            iam.simulate_principal_policy, PolicySourceArn=u["Arn"], ActionNames=["ssm:StartSession"],
+            ContextEntries=[{"ContextKeyName": "aws:MultiFactorAuthPresent",
+                             "ContextKeyValues": ["false"], "ContextKeyType": "boolean"}])
+        if serr:
+            sim_errors.append(f"{u['UserName']}({serr})")
+        elif any(r.get("EvalDecision") == "allowed" for r in sim["EvaluationResults"]):
+            no_mfa.append(u["UserName"])
+
+    if ssh_offenders or (not session_log_configured) or no_mfa:
         status = "FAIL"
-    elif config.SVC08_MFA_CROSS_CHECK_DONE:
-        status = "PASS"
-    else:
+    elif sim_errors:
         status = "REVIEW"
+    else:
+        status = "PASS"
 
     detail = (
         f"22번 포트 공개 SG: {', '.join(ssh_offenders) if ssh_offenders else '없음'} / "
         f"SSM 세션로그 CloudWatch·S3 연동: {session_log_note} / "
-        f"MFA 강제 여부는 클라우드 1.9(MFA 설정) 판정과 중복되어 별도 확인 후 반영 예정"
-        f"(config.SVC08_MFA_CROSS_CHECK_DONE={config.SVC08_MFA_CROSS_CHECK_DONE})"
+        f"MFA 없이 SSM 세션 시작(ssm:StartSession)이 허용되는 IAM 사용자: {', '.join(no_mfa) if no_mfa else '없음'}"
+        + (f" (자동화 계정 제외: {', '.join(excepted)})" if excepted else "")
+        + (f" / MFA 확인 실패: {', '.join(sim_errors)}" if sim_errors else "")
     )
     return [make_result("SVC-08", item, status, detail)]
 
 
-def run_all(eks, ec2, ssm, elbv2, cluster_names):
+def run_all(eks, ec2, ssm, elbv2, cluster_names, iam):
     results = []
     results += check_svc_02_vpc_cni(eks, cluster_names)
     results += check_authn_14_tls_enforced(elbv2)
-    results += check_svc_08_ssm_bastion(ec2, ssm)
+    results += check_svc_08_ssm_bastion(ec2, ssm, iam)
     return results

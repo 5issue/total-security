@@ -1,156 +1,116 @@
-"""3.10 — ELB(ALB) 연결 관리(제어 정책) 점검.
+"""3.10 — ELB(Elastic Load Balancing) 연결 관리 점검.
 
-인프라팀 협의 완료(2026-09-13, 8/8 전체 확정)로 판정유형 "제외"→"자동판정가능"으로
-전환: ①리스너 443+80리다이렉트 ②SSL Policy TLS1.2 미만 미사용 ③액세스로그 활성화
-(SSE-S3) ④Deletion Protection 활성화 ⑤Idle Timeout >= 60초(config.ELB_IDLE_TIMEOUT_
-SECONDS) ⑥헬스체크(경로 /, 200-399, 기본값 15초/5초/2/2) ⑦ALB 보안그룹 443/80만
-허용 ⑧Cross-Zone Load Balancing 자동활성화.
+[2026-09-28 원문(2024 클라우드 보안가이드 p107~116) 기준 재작성] 원문 판단기준은 "ELB 제어
+정책(AWS Security Hub ELB.1~16)을 준수하고 있는 경우 양호". 기존 9개 기준 중 원문 정책에 없는
+SSL Policy·Idle Timeout·헬스체크·ALB 보안그룹·Cross-Zone(ELB.9는 Classic LB 전용)은 초기
+분류표 착오라 판정에서 제외하고, 원문에 있는데 빠져 있던 ELB.4·ELB.12·ELB.13을 추가했다.
+  ALB 대상: ELB.1(HTTP→HTTPS 리다이렉트) ELB.4(잘못된 헤더 삭제) ELB.5(로깅) ELB.6(삭제 방지)
+            ELB.12(비동기화 완화 모드 defensive/strictest) ELB.16(WAF 웹 ACL 연결)
+  ELBv2 전체(ALB/NLB/GWLB): ELB.13(2개 이상 가용 영역)
+  Classic LB 전용 정책(ELB.2/3/7/8/9/10/14)은 CLB가 있을 때만 해당 — 이 스크립트는 CLB를
+  점검하지 않으므로 CLB가 발견되면 REVIEW(수동 확인)로 표시한다.
+ALB 보안그룹은 3.1/3.2, TLS 리스너는 4.4에서 판정한다.
 
-[2026-09-23] ⑨ WAF 연결 여부(원문 ELB.16) 추가 — AWS WAF 웹 ACL이 ALB에 연결돼
-있는지 실측. WAF는 인증인가 설계서상 "단계적 활성화"로 아직 미활성화 상태라 현재는
+[2026-09-23] ELB.16(WAF) — 인증인가 설계서상 "단계적 활성화"로 아직 미활성화 상태라 현재는
 FAIL로 잡히는 게 정상(활성화 완료 시 자동 PASS 전환).
 
-이 항목ID(3.10)는 분류표상 한 행이라, ALB/기준별 위반사항을 모아 하나의 PASS/FAIL로
-집계한다(개별 ALB 위반 내역은 상세 컬럼에 나열).
+이 항목ID(3.10)는 분류표상 한 행이라, LB·정책별 위반사항을 모아 하나의 판정으로 집계한다.
 """
-import config
 from .common import make_result, safe_call
 
-# ② SSL Policy — TLS1.2 미만을 포함하는 AWS 관리형 정책명 패턴(휴리스틱).
-#   실제 계정에 커스텀 정책이 있다면 이름만으로 판단이 어려우니 수동 대조 권장.
-WEAK_SSL_POLICY_MARKERS = ("TLS-1-0", "TLS-1-1", "2016-08")
+ELB_MIN_AVAILABILITY_ZONES = 2   # ELB.13 — Security Hub 기본값
+DESYNC_OK_MODES = ("defensive", "strictest")   # ELB.12
 
 
 def _attr(attrs, key, default=None):
     return next((a["Value"] for a in attrs if a["Key"] == key), default)
 
 
-def _http_code_covers_2xx_3xx(matcher_code: str) -> bool:
-    if not matcher_code:
-        return False
-    for part in matcher_code.split(","):
-        part = part.strip()
-        if "-" in part:
-            lo, hi = part.split("-")
-            if not (lo.strip().startswith(("2", "3")) and hi.strip().startswith(("2", "3"))):
-                return False
-        elif not part.startswith(("2", "3")):
-            return False
-    return True
-
-
-def _check_alb(elbv2, ec2, wafv2, lb):
-    name = lb["LoadBalancerName"]
+def _check_alb(elbv2, wafv2, lb):
     arn = lb["LoadBalancerArn"]
     violations = []
 
-    attrs_res, aerr = safe_call(elbv2.describe_load_balancer_attributes, LoadBalancerArn=arn)
-    attrs = attrs_res["Attributes"] if not aerr else []
-
+    # ELB.1 — 모든 HTTP 리스너가 HTTPS로 리다이렉트
     listeners_res, lerr = safe_call(elbv2.describe_listeners, LoadBalancerArn=arn)
-    listeners = listeners_res["Listeners"] if not lerr else []
-    ports = {l["Port"]: l for l in listeners}
-
-    # ① 리스너 443(HTTPS) + 80 → 443 리다이렉트
-    l443, l80 = ports.get(443), ports.get(80)
-    if not l443 or l443.get("Protocol") != "HTTPS":
-        violations.append("443/HTTPS 리스너 없음")
-    if not l80:
-        violations.append("80 리스너 없음")
+    if lerr:
+        violations.append(f"ELB.1 리스너 조회 실패: {lerr}")
     else:
-        redirects = [a for a in l80.get("DefaultActions", [])
-                     if a.get("Type") == "redirect" and a.get("RedirectConfig", {}).get("Protocol") == "HTTPS"]
-        if not redirects:
-            violations.append("80→443 리다이렉트 미설정")
+        for l in listeners_res["Listeners"]:
+            if l.get("Protocol") != "HTTP":
+                continue
+            redirects = [a for a in l.get("DefaultActions", [])
+                         if a.get("Type") == "redirect" and a.get("RedirectConfig", {}).get("Protocol") == "HTTPS"]
+            if not redirects:
+                violations.append(f"ELB.1 HTTP:{l.get('Port')} 리스너 HTTPS 리다이렉트 미설정")
 
-    # ② SSL Policy TLS1.2 미만 미사용
-    if l443:
-        policy = l443.get("SslPolicy", "") or ""
-        if any(marker in policy for marker in WEAK_SSL_POLICY_MARKERS):
-            violations.append(f"약한 SSL Policy: {policy}")
-
-    # ③ 액세스 로그 활성화(SSE-S3)
-    if _attr(attrs, "access_logs.s3.enabled") != "true":
-        violations.append("액세스 로그(S3) 비활성화")
-
-    # ④ Deletion Protection 활성화
-    if _attr(attrs, "deletion_protection.enabled") != "true":
-        violations.append("Deletion Protection 비활성화")
-
-    # ⑤ Idle Timeout — [확정 2026-09-13] 절대기준 ">= 60초"(정확히 60초도 PASS, `<`로만 FAIL)
-    idle_timeout = _attr(attrs, "idle_timeout.timeout_seconds")
-    idle_note = f"Idle Timeout={idle_timeout}s"
-    if config.ELB_IDLE_TIMEOUT_SECONDS is not None and idle_timeout is not None:
-        if int(idle_timeout) < int(config.ELB_IDLE_TIMEOUT_SECONDS):
-            violations.append(f"Idle Timeout {idle_timeout}s (기준 {config.ELB_IDLE_TIMEOUT_SECONDS}s 이상)")
-        idle_note += f" (기준 {config.ELB_IDLE_TIMEOUT_SECONDS}s 이상)"
+    # ELB.4/5/6/12 — 로드밸런서 속성
+    attrs_res, aerr = safe_call(elbv2.describe_load_balancer_attributes, LoadBalancerArn=arn)
+    if aerr:
+        violations.append(f"ELB.4/5/6/12 속성 조회 실패: {aerr}")
     else:
-        idle_note += " (기준값 미확정 — 판정 제외)"
+        attrs = attrs_res["Attributes"]
+        if _attr(attrs, "routing.http.drop_invalid_header_fields.enabled") != "true":
+            violations.append("ELB.4 잘못된 HTTP 헤더 삭제 비활성화")
+        if _attr(attrs, "access_logs.s3.enabled") != "true":
+            violations.append("ELB.5 액세스 로그 비활성화")
+        if _attr(attrs, "deletion_protection.enabled") != "true":
+            violations.append("ELB.6 삭제 방지 비활성화")
+        desync = _attr(attrs, "routing.http.desync_mitigation_mode")
+        if desync not in DESYNC_OK_MODES:
+            violations.append(f"ELB.12 비동기화 완화 모드={desync}(기준 defensive/strictest)")
 
-    # ⑥ 헬스체크 경로 '/'(또는 config.ELB_HEALTHCHECK_PATH_EXCEPTIONS 예외), 200-399,
-    #   기본값(간격15초/타임아웃5초/정상2/비정상2)
-    tgs_res, terr = safe_call(elbv2.describe_target_groups, LoadBalancerArn=arn)
-    healthcheck_allowed_paths = {"/"} | set(config.ELB_HEALTHCHECK_PATH_EXCEPTIONS or [])
-    for tg in (tgs_res["TargetGroups"] if not terr else []):
-        tg_name = tg["TargetGroupName"]
-        if tg.get("HealthCheckPath") not in healthcheck_allowed_paths:
-            violations.append(f"헬스체크({tg_name}) 경로={tg.get('HealthCheckPath')}(기준 '/' 또는 예외목록 {sorted(healthcheck_allowed_paths)})")
-        matcher_code = tg.get("Matcher", {}).get("HttpCode", "")
-        if not _http_code_covers_2xx_3xx(matcher_code):
-            violations.append(f"헬스체크({tg_name}) HttpCode={matcher_code}(기준 200-399)")
-        if (tg.get("HealthCheckIntervalSeconds") != 15 or tg.get("HealthCheckTimeoutSeconds") != 5
-                or tg.get("HealthyThresholdCount") != 2 or tg.get("UnhealthyThresholdCount") != 2):
-            violations.append(f"헬스체크({tg_name}) 간격/타임아웃/임계값 기본값(15/5/2/2) 아님")
-
-    # ⑦ ALB 보안그룹 443/80만 허용
-    sg_ids = lb.get("SecurityGroups", [])
-    if not sg_ids:
-        violations.append("ALB에 연결된 보안그룹 없음")
-    else:
-        sgs_res, serr = safe_call(ec2.describe_security_groups, GroupIds=sg_ids)
-        for sg in (sgs_res["SecurityGroups"] if not serr else []):
-            for perm in sg["IpPermissions"]:
-                from_port, to_port = perm.get("FromPort"), perm.get("ToPort")
-                if (from_port, to_port) not in ((443, 443), (80, 80)):
-                    violations.append(f"보안그룹({sg['GroupId']}) 인바운드 {from_port}-{to_port}(443/80 외)")
-
-    # ⑧ Cross-Zone Load Balancing 자동활성화
-    if _attr(attrs, "load_balancing.cross_zone.enabled") == "false":
-        violations.append("Cross-Zone Load Balancing 비활성화")
-
-    # ⑨ WAF 연결 여부(ELB.16) — AWS WAF 웹 ACL이 ALB에 연결돼 있는지 확인
+    # ELB.16 — WAF 웹 ACL 연결
     webacl_res, werr = safe_call(wafv2.get_web_acl_for_resource, ResourceArn=arn)
-    if werr or not (webacl_res or {}).get("WebACL"):
-        violations.append("WAF 웹 ACL 미연결")
+    if werr:
+        violations.append(f"ELB.16 WAF 연결 조회 실패: {werr}")
+    elif not (webacl_res or {}).get("WebACL"):
+        violations.append("ELB.16 WAF 웹 ACL 미연결")
 
-    return violations, idle_note
+    return violations
 
 
-def check_3_10_elb_control_policy(elbv2, ec2, wafv2):
+def check_3_10_elb_control_policy(elbv2, elb, wafv2):
     lbs_res, err = safe_call(elbv2.describe_load_balancers)
     if err:
         return [make_result("3.10", "ELB(Elastic Load Balancing) 연결 관리", "SKIP", f"ELB 목록 조회 실패: {err}")]
-    albs = [lb for lb in lbs_res["LoadBalancers"] if lb.get("Type") == "application"]
-    if not albs:
+    lbs = lbs_res["LoadBalancers"]
+    clbs_res, cerr = safe_call(elb.describe_load_balancers)
+    clb_names = [c["LoadBalancerName"] for c in clbs_res["LoadBalancerDescriptions"]] if not cerr else []
+
+    if not lbs and not clb_names:
         # ⚠ RDS(3.8/4.2/4.9, 영구 미사용 확정)와 달리 ALB는 이 아키텍처에 실제로 존재하는
         # 핵심 리소스라 "없음"이 정책상 해당없음(N/A)일 수 없다 — 로컬 테스트 계정처럼
         # ALB 자체가 없는 환경이거나, 운영에서라면 조회 재확인이 필요해 SKIP이 맞다.
         return [make_result("3.10", "ELB(Elastic Load Balancing) 연결 관리", "SKIP",
-                             "ALB 없음 — 로컬 테스트 계정처럼 ALB 미사용 환경이거나 운영에서는 조회 결과 재확인 필요")]
+                             "로드밸런서 없음 — 로컬 테스트 계정처럼 ALB 미사용 환경이거나 운영에서는 조회 결과 재확인 필요")]
 
     all_violations = []
-    idle_notes = []
-    for lb in albs:
-        violations, idle_note = _check_alb(elbv2, ec2, wafv2, lb)
-        idle_notes.append(f"{lb['LoadBalancerName']}: {idle_note}")
+    for lb in lbs:
+        violations = _check_alb(elbv2, wafv2, lb) if lb.get("Type") == "application" else []
+        azs = lb.get("AvailabilityZones", [])
+        if len(azs) < ELB_MIN_AVAILABILITY_ZONES:
+            violations.append(f"ELB.13 가용 영역 {len(azs)}개(기준 {ELB_MIN_AVAILABILITY_ZONES}개 이상)")
         if violations:
             all_violations.append(f"{lb['LoadBalancerName']}: " + "; ".join(violations))
 
-    status = "PASS" if not all_violations else "FAIL"
-    detail = ("확정 9개 항목 위반 없음" if not all_violations else " / ".join(all_violations))
-    detail += " | " + ", ".join(idle_notes)
+    notes = []
+    if cerr:
+        notes.append(f"Classic LB 조회 실패(ELB.2/3/7/8/9/10/14 확인 불가): {cerr}")
+    elif clb_names:
+        notes.append(f"Classic LB 존재 — ELB.2/3/7/8/9/10/14 수동 확인 필요: {', '.join(clb_names)}")
+
+    if all_violations:
+        status = "FAIL"
+    elif notes:
+        status = "REVIEW"
+    else:
+        status = "PASS"
+    detail = (" / ".join(all_violations) if all_violations
+              else "ELB 제어 정책(ELB.1/4/5/6/12/13/16) 위반 없음")
+    if notes:
+        detail += " | " + " / ".join(notes)
     return [make_result("3.10", "ELB(Elastic Load Balancing) 연결 관리", status, detail)]
 
 
-def run_all(elbv2, ec2, wafv2):
-    return check_3_10_elb_control_policy(elbv2, ec2, wafv2)
+def run_all(elbv2, elb, wafv2):
+    return check_3_10_elb_control_policy(elbv2, elb, wafv2)
