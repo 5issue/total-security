@@ -89,7 +89,7 @@
 
 - name: "D-03 | dba_admin 비밀번호 자동 교체 이력 조회(PostgreSQL, 최초 커넥션에서 1회)"
   ansible.builtin.set_fact:
-    d03_rotated_at: "{{ (((query('kubernetes.core.k8s', kind='Secret', name=d03_rotation.secrets.postgresql, namespace=d03_rotation.namespace) | first | default({})).metadata | default({})).annotations | default({}))[d03_rotation.annotation] | default('') }}"
+    d03_rotated_at: "{{ (((query('kubernetes.core.k8s', kind='Secret', resource_name=d03_rotation.secrets.postgresql, namespace=d03_rotation.namespace) | first | default({})).metadata | default({})).annotations | default({}))[d03_rotation.annotation] | default('') }}"
   when: >
     d03_user_accounts.postgresql | length > 0
     and (check_results | selectattr('id', 'equalto', 'D-03') | selectattr('target', 'equalto', '전체(PostgreSQL 유저 계정)') | list | length == 0)

@@ -29,7 +29,7 @@
   # lookup()이 이를 단일 객체로 풀어주는지는 Ansible 버전마다 달라 .data가 비어 비밀번호가 누락되는
   # 문제가 있었음(인프라팀 제보). query()는 항상 리스트라 first로 꺼내면 버전과 무관하게 동작.
   vars:
-    mysql_admin_secret_data: "{{ (query('kubernetes.core.k8s', kind='Secret', name=dbms_admin_connections.mysql.secret_ref, namespace=dbms_admin_connections.mysql.namespace | default('default')) | first | default({})).data | default({}) }}"
+    mysql_admin_secret_data: "{{ (query('kubernetes.core.k8s', kind='Secret', resource_name=dbms_admin_connections.mysql.secret_ref, namespace=dbms_admin_connections.mysql.namespace | default('default')) | first | default({})).data | default({}) }}"
   ansible.builtin.set_fact:
     mysql_admin_user: "{{ dbms_admin_connections.mysql.secret_username }}"
     mysql_admin_password: "{{ mysql_admin_secret_data[dbms_admin_connections.mysql.secret_password_key] | default('') | b64decode }}"
@@ -148,7 +148,7 @@
 
 - name: "D-03 | dba_admin 비밀번호 자동 교체 이력 조회(MySQL, 최초 커넥션에서 1회)"
   ansible.builtin.set_fact:
-    d03_rotated_at: "{{ (((query('kubernetes.core.k8s', kind='Secret', name=d03_rotation.secrets.mysql, namespace=d03_rotation.namespace) | first | default({})).metadata | default({})).annotations | default({}))[d03_rotation.annotation] | default('') }}"
+    d03_rotated_at: "{{ (((query('kubernetes.core.k8s', kind='Secret', resource_name=d03_rotation.secrets.mysql, namespace=d03_rotation.namespace) | first | default({})).metadata | default({})).annotations | default({}))[d03_rotation.annotation] | default('') }}"
   when: >
     d03_user_accounts.mysql | length > 0
     and (check_results | selectattr('id', 'equalto', 'D-03') | selectattr('target', 'equalto', '전체(MySQL 유저 계정)') | list | length == 0)
