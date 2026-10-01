@@ -27,8 +27,10 @@ IAM_ACCOUNT_OWNER_MAP = {
     "be-user1": "손하영",
     "be-user2": "김재우",
     "be-user3": "신지훈",
+    # 2026-10-01 인프라팀 회신 — GitHub Actions에서 MySQL(audit 플러그인) 이미지를 ECR로 push하는 CI 전용 계정
+    "github-ecr": "GitHub Actions ECR push 전용 계정",
 }
-IAM_SHARED_ACCOUNT_EXCEPTIONS = ["mgmt-automation-user"]
+IAM_SHARED_ACCOUNT_EXCEPTIONS = ["mgmt-automation-user", "github-ecr"]
 
 # 1.8 Access Key 사용주기
 ACCESS_KEY_ROTATION_CONFIG_RULE = "access-keys-rotated"
